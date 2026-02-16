@@ -8,6 +8,7 @@ Usage:
     python -m apex_sharpe 0dte            — Live 0DTE directional signal monitor
     python -m apex_sharpe 0dte-demo       — Offline demo using recent data
     python -m apex_sharpe 0dte-backtest   — Backtest signals against 6 months
+    python -m apex_sharpe 0dte-cron       — Auto-start/stop 0DTE for cron (market hours)
     python -m apex_sharpe 0dte-trades     — Backtest trade structures on signals
     python -m apex_sharpe directional     — Live 0DTE with portfolio orchestration
     python -m apex_sharpe backtest-all    — Compare all 5 structures + adaptive
@@ -32,6 +33,10 @@ Usage:
     python -m apex_sharpe novelty         — Novelty / anomaly / lead-lag discovery
     python -m apex_sharpe scout           — External dataset scouting
     python -m apex_sharpe hierarchy       — Agent hierarchy and division structure
+    python -m apex_sharpe ib-status       — IB account status, positions, P&L
+    python -m apex_sharpe ib-sync         — Reconcile positions.json with IB
+    python -m apex_sharpe ib-history      — Download historical bars from IB
+    python -m apex_sharpe ib-chain        — Fetch live option chain from IB
 """
 
 import sys
@@ -52,6 +57,7 @@ IC Pipeline:
   0dte            Live 0DTE directional signal monitor
   0dte-demo       Offline demo using recent historical data
   0dte-backtest   Backtest signals against 6 months of data
+  0dte-cron       Auto-start/stop 0DTE monitor (market hours only, for cron)
   0dte-trades     Backtest trade structures on signal days
 
 Portfolio Management:
@@ -82,6 +88,12 @@ Research & Backtesting:
   novelty         Novelty / anomaly / lead-lag discovery
   scout           External dataset scouting and recommendations
   hierarchy       Agent hierarchy and division structure
+
+Interactive Brokers:
+  ib-status       IB account status, positions, P&L
+  ib-sync         Reconcile positions.json with IB account
+  ib-history      Download historical bars from IB
+  ib-chain        Fetch live option chain from IB
 """
 
 
@@ -99,13 +111,26 @@ def main() -> None:
 
     if mode in ("scan", "monitor", "full"):
         from .pipelines.ic_pipeline import ICPipeline
-        pipeline = ICPipeline(config, orats, state)
-        if mode == "scan":
-            pipeline.run_scan()
-        elif mode == "monitor":
-            pipeline.run_monitor()
-        else:
-            pipeline.run_full()
+        ib_client = None
+        if config.ib.enabled:
+            from .data.ib_client import IBClient
+            try:
+                ib_client = IBClient(config.ib)
+                ib_client.connect()
+            except Exception as exc:
+                print(f"[IB] Connection failed: {exc} — falling back to simulated execution")
+                ib_client = None
+        pipeline = ICPipeline(config, orats, state, ib_client=ib_client)
+        try:
+            if mode == "scan":
+                pipeline.run_scan()
+            elif mode == "monitor":
+                pipeline.run_monitor()
+            else:
+                pipeline.run_full()
+        finally:
+            if ib_client:
+                ib_client.disconnect()
 
     # -- 0DTE Signal Monitor -----------------------------------------------
 
@@ -120,6 +145,10 @@ def main() -> None:
     elif mode == "0dte-backtest":
         from .pipelines.zero_dte_pipeline import ZeroDTEPipeline
         ZeroDTEPipeline(config, orats, state).run_backtest()
+
+    elif mode == "0dte-cron":
+        from .pipelines.zero_dte_pipeline import ZeroDTEPipeline
+        ZeroDTEPipeline(config, orats, state).run_live(auto_exit=True)
 
     elif mode == "0dte-trades":
         from .pipelines.zero_dte_pipeline import ZeroDTEPipeline
@@ -594,6 +623,96 @@ def main() -> None:
         from .agents.manager import AgentManager
         mgr = AgentManager()
         mgr.print_hierarchy()
+
+    # -- Interactive Brokers ---------------------------------------------------
+
+    elif mode in ("ib-status", "ib_status"):
+        from .data.ib_client import IBClient
+        from .agents.ib_sync import IBSyncAgent
+        with IBClient(config.ib) as ib:
+            agent = IBSyncAgent(ib)
+            result = agent.run({"action": "account"})
+            agent.print_account(result)
+
+    elif mode in ("ib-sync", "ib_sync"):
+        from .data.ib_client import IBClient
+        from .agents.ib_sync import IBSyncAgent
+        with IBClient(config.ib) as ib:
+            agent = IBSyncAgent(ib)
+            positions = state.load_positions()
+            sub = sys.argv[2] if len(sys.argv) > 2 else "sync"
+            if sub == "sync":
+                result = agent.run({"action": "sync", "positions": positions})
+                agent.print_sync(result)
+            elif sub == "reconcile":
+                result = agent.run({"action": "reconcile", "positions": positions})
+                if result.success:
+                    state.save_positions(result.data["positions"])
+                    print(f"  Updated {len(result.data['changes'])} positions")
+                    for c in result.data["changes"]:
+                        print(f"    {c}")
+            elif sub == "import":
+                result = agent.run({"action": "import"})
+                if result.data["count"] > 0:
+                    positions.extend(result.data["imported"])
+                    state.save_positions(positions)
+                    print(f"  Imported {result.data['count']} positions from IB")
+                else:
+                    print("  No IB positions to import")
+            else:
+                print("ib-sync sub-commands: sync, reconcile, import")
+
+    elif mode in ("ib-history", "ib_history"):
+        from .data.ib_client import IBClient
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPY"
+        duration = sys.argv[3] if len(sys.argv) > 3 else "30 D"
+        bar_size = sys.argv[4] if len(sys.argv) > 4 else "1 day"
+        with IBClient(config.ib) as ib:
+            bars = ib.historical_bars(ticker, duration, bar_size)
+            print(f"\n  {ticker} — {len(bars)} bars ({duration}, {bar_size})")
+            print(f"  {'Date':<12} {'Open':>8} {'High':>8} {'Low':>8}"
+                  f" {'Close':>8} {'Volume':>10}")
+            print(f"  {'-' * 60}")
+            for b in bars[-20:]:
+                print(f"  {b['date']:<12} {b['open']:>8.2f} {b['high']:>8.2f}"
+                      f" {b['low']:>8.2f} {b['close']:>8.2f}"
+                      f" {b['volume']:>10,}")
+            if len(bars) > 20:
+                print(f"  ... showing last 20 of {len(bars)} bars")
+
+    elif mode in ("ib-chain", "ib_chain"):
+        from .data.ib_client import IBClient
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPY"
+        expiry = sys.argv[3] if len(sys.argv) > 3 else ""
+        with IBClient(config.ib) as ib:
+            if not expiry:
+                params = ib.option_params(ticker)
+                exps = params.get("expirations", [])[:5]
+                print(f"\n  {ticker} — next 5 expirations: {', '.join(exps)}")
+                if exps:
+                    expiry = exps[0]
+                else:
+                    print("  No expirations found")
+                    sys.exit(1)
+            chain = ib.option_chain(ticker, expiry)
+            if chain and chain.get("data"):
+                data = chain["data"]
+                spot = data[0].get("stockPrice", 0)
+                print(f"\n  {ticker} {expiry} — {len(data)} strikes"
+                      f"  spot=${spot:.2f}")
+                print(f"  {'Strike':>8} {'Delta':>7} {'C.Bid':>7} {'C.Ask':>7}"
+                      f" {'P.Bid':>7} {'P.Ask':>7} {'IV':>7}")
+                print(f"  {'-' * 52}")
+                for row in data:
+                    print(f"  {row['strike']:>8.1f}"
+                          f" {row.get('delta', 0):>+7.3f}"
+                          f" {row.get('callBidPrice', 0):>7.2f}"
+                          f" {row.get('callAskPrice', 0):>7.2f}"
+                          f" {row.get('putBidPrice', 0):>7.2f}"
+                          f" {row.get('putAskPrice', 0):>7.2f}"
+                          f" {row.get('callSmvVol', 0):>7.1%}")
+            else:
+                print(f"  No chain data for {ticker} {expiry}")
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

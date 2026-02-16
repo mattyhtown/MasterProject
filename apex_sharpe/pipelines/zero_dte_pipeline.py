@@ -27,9 +27,10 @@ class ZeroDTEPipeline:
         if self.db.enabled:
             self.db.run({"action": "ensure_schema", "pipeline": "zero_dte"})
 
-    def run_live(self) -> None:
+    def run_live(self, auto_exit: bool = False) -> None:
         self._ensure_tables()
-        self.agent.run_live(self.orats, self.state, db=self.db)
+        self.agent.run_live(self.orats, self.state, db=self.db,
+                            auto_exit=auto_exit)
 
     def run_demo(self) -> None:
         # Demo is display-only — log signals but don't persist trades

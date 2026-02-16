@@ -22,14 +22,25 @@ from ..types import C
 class ICPipeline:
     """Orchestrate Scanner -> Risk -> Executor -> Monitor -> Reporter -> Database."""
 
-    def __init__(self, config: AppConfig, orats: ORATSClient, state: StateManager):
+    def __init__(self, config: AppConfig, orats: ORATSClient, state: StateManager,
+                 ib_client=None):
         self.config = config
         self.orats = orats
         self.state = state
+        self.ib_client = ib_client
 
         self.scanner = ScannerAgent(config.scanner)
         self.risk = RiskAgent(config.risk)
-        self.executor = ExecutorAgent(config.executor, config.monitor)
+
+        # Use IB executor when enabled and connected
+        if config.ib.enabled and ib_client is not None:
+            from ..agents.ib_executor import IBExecutorAgent
+            self.executor = IBExecutorAgent(ib_client, config.executor, config.monitor)
+            self._ib_mode = True
+        else:
+            self.executor = ExecutorAgent(config.executor, config.monitor)
+            self._ib_mode = False
+
         self.monitor_agent = MonitorAgent(config.monitor)
         self.reporter = ReporterAgent()
         self.db = DatabaseAgent(config.supabase)
@@ -38,7 +49,8 @@ class ICPipeline:
 
     def run_scan(self) -> None:
         print("=" * 80)
-        print("APEX-SHARPE AGENT PIPELINE — SCAN MODE")
+        mode_tag = " [IB LIVE]" if self._ib_mode else ""
+        print(f"APEX-SHARPE AGENT PIPELINE — SCAN MODE{mode_tag}")
         print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
 
@@ -80,7 +92,8 @@ class ICPipeline:
 
     def run_monitor(self) -> None:
         print("=" * 80)
-        print("APEX-SHARPE AGENT PIPELINE — MONITOR MODE")
+        mode_tag = " [IB LIVE]" if self._ib_mode else ""
+        print(f"APEX-SHARPE AGENT PIPELINE — MONITOR MODE{mode_tag}")
         print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 80)
 

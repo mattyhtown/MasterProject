@@ -301,6 +301,24 @@ AGENT_REGISTRY: List[AgentCapability] = [
         risk_level=RiskLevel.LOW,
         description="Discovers anomalies, lead/lag relationships, and hidden factors",
     ),
+    # IB agents
+    AgentCapability(
+        "IBExecutor", "IBExecutorAgent",
+        data_sources=["ib_gateway"],
+        signal_systems=[],
+        trade_actions=["place_order", "close_position", "what_if_order"],
+        risk_level=RiskLevel.HIGH,
+        requires_approval=True,
+        description="Real trade execution via Interactive Brokers",
+    ),
+    AgentCapability(
+        "IBSync", "IBSyncAgent",
+        data_sources=["ib_gateway", "positions"],
+        signal_systems=[],
+        trade_actions=["sync_positions", "reconcile", "import_positions"],
+        risk_level=RiskLevel.LOW,
+        description="Reconcile local positions with IB account",
+    ),
     AgentCapability(
         "DataScout", "DataScoutAgent",
         data_sources=["external_catalogs"],
@@ -378,7 +396,7 @@ AGENT_HIERARCHY = {
                 },
                 {
                     "name": "Execution",
-                    "agents": ["Risk", "Executor"],
+                    "agents": ["Risk", "Executor", "IBExecutor"],
                     "description": "Risk-gate and execute approved trades",
                 },
                 {
@@ -456,8 +474,8 @@ AGENT_HIERARCHY = {
             "groups": [
                 {
                     "name": "Shared Services",
-                    "agents": ["Database", "Reporter"],
-                    "description": "Supabase persistence and terminal/macOS notifications",
+                    "agents": ["Database", "Reporter", "IBSync"],
+                    "description": "Supabase persistence, notifications, IB position sync",
                 },
             ],
         },

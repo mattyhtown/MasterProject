@@ -15,6 +15,38 @@ from ..data.yfinance_client import yf_price, yf_credit
 from ..types import AgentResult, C
 
 
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """Return the nth occurrence of a weekday in a month (1-indexed)."""
+    first = date(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    return first + timedelta(days=offset + 7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    """Return the last occurrence of a weekday in a month."""
+    if month == 12:
+        last = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last = date(year, month + 1, 1) - timedelta(days=1)
+    offset = (last.weekday() - weekday) % 7
+    return last - timedelta(days=offset)
+
+
+def _easter(year: int) -> date:
+    """Compute Easter Sunday (Anonymous Gregorian algorithm)."""
+    a = year % 19
+    b, c = divmod(year, 100)
+    d, e = divmod(b, 4)
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = divmod(c, 4)
+    el = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * el) // 451
+    month, day = divmod(h + el - 7 * m + 114, 31)
+    return date(year, month, day + 1)
+
+
 class ZeroDTEAgent(BaseAgent):
     """0DTE directional signal monitor using ORATS vol surface data.
 
@@ -306,16 +338,79 @@ class ZeroDTEAgent(BaseAgent):
 
     # -- live polling mode ------------------------------------------------
 
-    def run_live(self, orats, state, db=None) -> None:
-        """Live polling mode. Runs until Ctrl+C."""
+    @staticmethod
+    def _market_open() -> bool:
+        """Check if US equity markets are currently open (9:30-16:00 ET).
+
+        Checks weekday, time of day, and major US market holidays.
+        """
+        try:
+            from zoneinfo import ZoneInfo
+        except ImportError:
+            from backports.zoneinfo import ZoneInfo
+        now_et = datetime.now(ZoneInfo("America/New_York"))
+        # Weekend check
+        if now_et.weekday() >= 5:
+            return False
+        # US market holidays (fixed + observed rules)
+        y = now_et.year
+        holidays = set()
+        # New Year's Day
+        holidays.add(date(y, 1, 1))
+        # MLK Day — 3rd Monday of January
+        holidays.add(_nth_weekday(y, 1, 0, 3))
+        # Presidents' Day — 3rd Monday of February
+        holidays.add(_nth_weekday(y, 2, 0, 3))
+        # Good Friday — 2 days before Easter Sunday
+        holidays.add(_easter(y) - timedelta(days=2))
+        # Memorial Day — last Monday of May
+        holidays.add(_last_weekday(y, 5, 0))
+        # Juneteenth
+        holidays.add(date(y, 6, 19))
+        # Independence Day
+        holidays.add(date(y, 7, 4))
+        # Labor Day — 1st Monday of September
+        holidays.add(_nth_weekday(y, 9, 0, 1))
+        # Thanksgiving — 4th Thursday of November
+        holidays.add(_nth_weekday(y, 11, 3, 4))
+        # Christmas
+        holidays.add(date(y, 12, 25))
+        # Observed: if holiday falls on Sat → Fri, Sun → Mon
+        observed = set()
+        for h in holidays:
+            if h.weekday() == 5:  # Saturday
+                observed.add(h - timedelta(days=1))
+            elif h.weekday() == 6:  # Sunday
+                observed.add(h + timedelta(days=1))
+            else:
+                observed.add(h)
+        if now_et.date() in observed:
+            return False
+        t = now_et.time()
+        from datetime import time as dtime
+        return dtime(9, 30) <= t <= dtime(16, 0)
+
+    def run_live(self, orats, state, db=None, auto_exit: bool = False) -> None:
+        """Live polling mode. Runs until Ctrl+C or market close (if auto_exit).
+
+        Args:
+            auto_exit: If True, exit automatically when market closes (for cron).
+        """
         cfg = self.config
         from ..agents.reporter import send_notification
 
         print(f"{C.BOLD}{C.CYAN}0DTE Signal Monitor — Live Mode{C.RESET}")
         print(f"  Tickers: {', '.join(cfg.tickers)}")
         print(f"  Interval: {cfg.poll_interval}s | Log: {state.signals_path}")
+        if auto_exit:
+            print(f"  Auto-exit: ON (will stop at 4:00 PM ET)")
         print(f"  Core composite: ANY {cfg.composite_min} of "
               f"{len(cfg.core_signals)} -> {', '.join(cfg.core_signals)}\n")
+
+        # If auto_exit, check that market is actually open
+        if auto_exit and not self._market_open():
+            print(f"  {C.YELLOW}Market closed — skipping.{C.RESET}")
+            return
 
         # Load previous-day summaries
         for days_back in range(1, 5):
@@ -331,6 +426,12 @@ class ZeroDTEAgent(BaseAgent):
         n = 0
         try:
             while True:
+                # Auto-exit after market close
+                if auto_exit and not self._market_open():
+                    print(f"\n{C.BOLD}Market closed. "
+                          f"{len(self.log_entries)} entries "
+                          f"-> {state.signals_path}{C.RESET}")
+                    return
                 n += 1
                 hyg, tlt, hyg_p, tlt_p = yf_credit()
                 credit_sig = self.compute_credit_signal(hyg, tlt, hyg_p, tlt_p)

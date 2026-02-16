@@ -15,6 +15,8 @@ from .tax import TaxAgent
 from .margin import MarginAgent
 from .treasury import TreasuryAgent
 from .manager import AgentManager
+from .ib_executor import IBExecutorAgent
+from .ib_sync import IBSyncAgent
 from .strategy import (
     StrategyAgentBase,
     CallDebitSpreadAgent,
@@ -64,6 +66,9 @@ __all__ = [
     # Backtest agents
     "ExtendedBacktest",
     "RegimeClassifier",
+    # IB agents
+    "IBExecutorAgent",
+    "IBSyncAgent",
     # Research agents
     "DataCatalogAgent",
     "ResearchAgent",

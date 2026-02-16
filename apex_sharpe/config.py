@@ -45,6 +45,20 @@ class OratsCfg:
 class SupabaseCfg:
     url: str = ""
     key: str = ""
+    service_key: str = ""
+
+
+@dataclass(frozen=True)
+class IBCfg:
+    enabled: bool = False
+    host: str = "127.0.0.1"
+    port: int = 4002          # 4001=Gateway live, 4002=Gateway paper
+    client_id: int = 1
+    account_id: str = ""
+    timeout: float = 30.0
+    max_positions: int = 10
+    order_timeout: int = 60
+    paper: bool = True
 
 
 @dataclass(frozen=True)
@@ -315,6 +329,8 @@ class AppConfig:
     # Research
     historical_data: HistoricalDataCfg = field(default_factory=HistoricalDataCfg)
     research: ResearchCfg = field(default_factory=ResearchCfg)
+    # IB
+    ib: IBCfg = field(default_factory=IBCfg)
 
 
 def load_config() -> AppConfig:
@@ -344,6 +360,7 @@ def load_config() -> AppConfig:
         supabase=SupabaseCfg(
             url=_env("SUPABASE_URL"),
             key=_env("SUPABASE_KEY"),
+            service_key=_env("SUPABASE_SERVICE_KEY"),
         ),
         state=StateCfg(
             signals_path=str(Path(home) / "0dte_signals.json"),
@@ -351,5 +368,13 @@ def load_config() -> AppConfig:
         ),
         historical_data=HistoricalDataCfg(
             data_dir=data_dir,
+        ),
+        ib=IBCfg(
+            enabled=_env("IB_ENABLED", "false").lower() == "true",
+            host=_env("IB_HOST", "127.0.0.1"),
+            port=int(_env("IB_PORT", "4002")),
+            client_id=int(_env("IB_CLIENT_ID", "1")),
+            account_id=_env("IB_ACCOUNT"),
+            paper=_env("IB_PAPER", "true").lower() == "true",
         ),
     )

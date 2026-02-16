@@ -18,12 +18,15 @@ class SupabaseSync:
         config = config or SupabaseCfg()
         self.client = None
         self.strategy_id: Optional[str] = None
-        if config.url and config.key:
+        # Prefer service_role key (bypasses RLS) over anon key
+        api_key = config.service_key or config.key
+        if config.url and api_key:
             try:
                 from supabase import create_client
-                self.client = create_client(config.url, config.key)
+                self.client = create_client(config.url, api_key)
                 self._ensure_strategy()
-                print("[Supabase] Connected")
+                role = "service_role" if config.service_key else "anon"
+                print(f"[Supabase] Connected ({role})")
             except Exception as exc:
                 print(f"[Supabase] Init failed (continuing without DB): {exc}")
                 self.client = None
