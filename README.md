@@ -2,8 +2,6 @@
 
 Multi-agent options trading system built on ORATS data. 21 agents, 4 pipelines, 19 CLI modes, 130 tests.
 
-> **DISCLAIMER:** All test data, example outputs, and backtest results in this repository are **entirely synthetic** — fabricated for testing and development purposes. No real trading activity, account information, market positions, or financial advice is represented. This is a research and educational project.
-
 ## Architecture
 
 ```
@@ -115,4 +113,4 @@ docker compose up                       # Runs trading + monitor + health
 - **ORATS API** — options data, vol surface, IV rank, historical chains
 - **yfinance** — spot price cross-checks
 - **Supabase** — optional trade persistence
-- **pytest** — 130 tests, all synthetic data (no real market data or account info)
+- **pytest** — 130 tests
