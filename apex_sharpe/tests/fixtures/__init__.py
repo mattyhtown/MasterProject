@@ -23,8 +23,11 @@ FIXTURES_DIR = Path(__file__).parent
 
 def has_fixtures() -> bool:
     """Check if real data fixtures have been captured."""
-    manifest = FIXTURES_DIR / "_manifest.json"
-    return manifest.exists()
+    data_files = [
+        p for p in FIXTURES_DIR.glob("*.json")
+        if not p.stem.startswith("_")
+    ]
+    return len(data_files) > 0
 
 
 def load_fixture(name: str) -> Optional[Dict[str, Any]]:
