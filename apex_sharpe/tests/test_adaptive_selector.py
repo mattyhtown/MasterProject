@@ -63,5 +63,5 @@ def test_all_structures_ranked():
     a = AdaptiveSelector()
     result = a.select(_summary(), core_count=3)
     structures = [r[0] for r in result]
-    assert len(structures) == 5
+    assert len(structures) == 7
     assert set(structures) == set(TradeStructure)

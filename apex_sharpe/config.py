@@ -134,6 +134,10 @@ class TradeBacktestCfg:
     bull_ps_short: float = 0.30
     bull_ps_long: float = 0.15
     long_call_delta: float = 0.50
+    # Bearish structures
+    put_ds_long: float = 0.40       # Buy ~40d put (closer to ATM)
+    put_ds_short: float = 0.25      # Sell ~25d put (more OTM)
+    long_put_delta: float = 0.50    # Buy ~50d put (ATM)
 
 
 @dataclass(frozen=True)

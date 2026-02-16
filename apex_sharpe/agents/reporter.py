@@ -69,25 +69,13 @@ class ReporterAgent(BaseAgent):
             print(f"  {p['id']}: credit ${p['entry_credit']:.2f}, "
                   f"max P/L ${p['max_profit']:.0f}/${p['max_loss']:.0f}")
 
+        # Only notify on actual trade opens — suppress noise from
+        # blocked candidates and empty scans (these fire every cron run)
         if new_positions:
             send_notification(
                 title="APEX-SHARPE: New Position",
                 subtitle=f"{len(new_positions)} trade(s) opened",
                 message=f"{new_positions[0]['id']} — credit ${new_positions[0]['entry_credit']:.2f}",
-            )
-        elif candidates:
-            send_notification(
-                title="APEX-SHARPE: Scan Complete",
-                subtitle="Candidates blocked by risk rules",
-                message=f"{len(candidates)} candidate(s), 0 opened",
-                sound=False,
-            )
-        else:
-            send_notification(
-                title="APEX-SHARPE: Scan Complete",
-                subtitle="No opportunities found",
-                message="IV or DTE criteria not met",
-                sound=False,
             )
 
     @staticmethod
@@ -159,7 +147,7 @@ class ReporterAgent(BaseAgent):
               f"Positions closed: {len(closed_positions)}  |  "
               f"Actions: {len(action_alerts)}  |  Warnings: {len(warning_alerts)}")
 
-        # Notifications
+        # Only notify on ACTION or WARNING — suppress "All Clear" noise
         if action_alerts:
             send_notification(
                 title="APEX-SHARPE: ACTION REQUIRED",
@@ -171,11 +159,4 @@ class ReporterAgent(BaseAgent):
                 title="APEX-SHARPE: Warning",
                 subtitle=f"{len(warning_alerts)} warning(s)",
                 message=warning_alerts[0][:200],
-            )
-        else:
-            send_notification(
-                title="APEX-SHARPE: All Clear",
-                subtitle="No alerts",
-                message=f"P&L ${total_pnl:+.0f} across {len(monitor_results)} position(s)",
-                sound=False,
             )

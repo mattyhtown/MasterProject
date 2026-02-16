@@ -43,11 +43,15 @@ class AlertSeverity(Enum):
 
 class TradeStructure(Enum):
     """Available directional trade structures."""
+    # Bullish
     CALL_DEBIT_SPREAD = "Call Debit Spread"
     BULL_PUT_SPREAD = "Bull Put Spread"
     LONG_CALL = "Long Call"
     CALL_RATIO_SPREAD = "Call Ratio Spread"
     BROKEN_WING_BUTTERFLY = "Broken Wing Butterfly"
+    # Bearish
+    PUT_DEBIT_SPREAD = "Put Debit Spread"
+    LONG_PUT = "Long Put"
 
 
 class SignalStrength(Enum):

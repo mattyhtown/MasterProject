@@ -16,6 +16,8 @@ from apex_sharpe.agents.strategy import (
     LongCallAgent,
     CallRatioSpreadAgent,
     BrokenWingButterflyAgent,
+    PutDebitSpreadAgent,
+    LongPutAgent,
 )
 from apex_sharpe.types import TradeStructure
 
@@ -136,6 +138,70 @@ class TestBrokenWingButterfly:
         assert agent.NUM_LEGS == 4
 
 
+class TestPutDebitSpread:
+    def test_find_strikes(self):
+        agent = PutDebitSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            # Long put = higher strike, short put = lower strike
+            assert strikes["long_strike"] > strikes["short_strike"]
+            assert strikes["width"] > 0
+
+    def test_simulate_entry(self):
+        agent = PutDebitSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            assert fill is not None
+            assert fill["qty"] >= 1
+            assert fill["max_risk"] > 0
+            assert fill["entry_cost"] > 0
+
+    def test_compute_pnl_winner(self):
+        agent = PutDebitSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            # Price moves down: winner for bear put spread
+            pnl_down = agent.compute_pnl(strikes, fill, 80.0)
+            pnl_up = agent.compute_pnl(strikes, fill, 120.0)
+            assert pnl_down > pnl_up
+
+    def test_structure_enum(self):
+        agent = PutDebitSpreadAgent()
+        assert agent.STRUCTURE == TradeStructure.PUT_DEBIT_SPREAD
+        assert agent.NUM_LEGS == 2
+
+
+class TestLongPut:
+    def test_find_strikes(self):
+        agent = LongPutAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        assert strikes is not None
+        assert "strike" in strikes
+        assert "delta" in strikes
+
+    def test_simulate_entry(self):
+        agent = LongPutAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        fill = agent.simulate_entry(strikes, 5000.0)
+        assert fill is not None
+        assert fill["max_profit"] is None  # unlimited downside capture
+
+    def test_compute_pnl(self):
+        agent = LongPutAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        fill = agent.simulate_entry(strikes, 5000.0)
+        pnl_down = agent.compute_pnl(strikes, fill, 80.0)
+        pnl_up = agent.compute_pnl(strikes, fill, 120.0)
+        assert pnl_down > pnl_up  # bearish: wins when price drops
+
+    def test_structure_enum(self):
+        agent = LongPutAgent()
+        assert agent.STRUCTURE == TradeStructure.LONG_PUT
+        assert agent.NUM_LEGS == 1
+
+
 class TestAllAgentsInterface:
     """Verify all strategy agents implement the full interface."""
 
@@ -145,6 +211,8 @@ class TestAllAgentsInterface:
         LongCallAgent,
         CallRatioSpreadAgent,
         BrokenWingButterflyAgent,
+        PutDebitSpreadAgent,
+        LongPutAgent,
     ])
     def test_has_required_methods(self, cls):
         agent = cls()

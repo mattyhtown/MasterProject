@@ -1,9 +1,10 @@
 """
-TradeStructureBacktest — backtest 5 trade structures on FEAR_BOUNCE signal days.
+TradeStructureBacktest — backtest 7 trade structures on FEAR_BOUNCE signal days.
 
 Supports signal-weighted sizing via SignalSizer and adaptive structure
 selection via AdaptiveSelector. Compares all structures side-by-side plus
-a virtual "Adaptive" strategy that picks the best structure per day.
+virtual strategies: "Adaptive" (best structure per day), regime split
+(bounce vs sell-through), and "Flip" (bullish + bearish recovery).
 """
 
 import time
@@ -21,25 +22,30 @@ from ..types import AgentResult, C, TradeStructure
 
 
 class TradeStructureBacktest(BaseAgent):
-    """Backtest 5 trade structures on FEAR_BOUNCE signal days.
+    """Backtest 7 trade structures on FEAR_BOUNCE signal days.
 
-    Structures:
+    Bullish structures:
       1. Call debit spread  (buy ~40d call, sell ~25d call)
       2. Bull put spread    (sell ~30d put, buy ~15d put)
       3. Long call          (buy ~50d call)
-      4. Call ratio spread  (buy 1x ~50d, sell 2x ~25d)    NEW
-      5. Broken wing butterfly (1/-2/1 asymmetric calls)   NEW
+      4. Call ratio spread  (buy 1x ~50d, sell 2x ~25d)
+      5. Broken wing butterfly (1/-2/1 asymmetric calls)
 
-    Enhancements over v1:
-      - Signal-weighted sizing (3 sig: $5K, 4: $7.5K, 5: $10K)
-      - Adaptive selection (vol surface -> best structure)
-      - Side-by-side comparison of all 5 + virtual "Adaptive" strategy
+    Bearish structures:
+      6. Put debit spread   (buy ~40d put, sell ~25d put)
+      7. Long put           (buy ~50d put)
+
+    Virtual strategies:
+      - Adaptive: best structure per day via vol surface conditions
+      - Oracle Flip: best bullish on bounces, best bearish on sell-throughs
+      - Signal Flip: adaptive pick + bearish recovery when adaptive loses
     """
 
     # Structure display order
     STRUCTURE_NAMES = [
         "Call Debit Spread", "Bull Put Spread", "Long Call",
         "Call Ratio Spread", "Broken Wing Butterfly",
+        "Put Debit Spread", "Long Put",
     ]
 
     def __init__(self, config: TradeBacktestCfg = None,
@@ -339,6 +345,67 @@ class TradeStructureBacktest(BaseAgent):
                     "comm": round(comm * qty, 2),
                 })
 
+        # --- 6. Put Debit Spread (Bear Put Spread) ---
+        pd_long = self._find_puts(strikes, cfg.put_ds_long, tol)
+        pd_short = self._find_puts(strikes, cfg.put_ds_short, tol)
+        if pd_long and pd_short:
+            lp = pd_long[0]   # higher abs delta = higher strike
+            sp = pd_short[0]  # lower abs delta = lower strike
+            if lp["strike"] > sp["strike"]:
+                cost = lp.get("putAskPrice", 0) - sp.get("putBidPrice", 0)
+                if cost > 0:
+                    cost_slip = cost * (1 + cfg.slippage)
+                    comm = cfg.commission_per_leg * 2
+                    risk_per = cost_slip * 100 + comm
+                    qty = max(1, int(max_risk / risk_per))
+                    # P&L at next_close
+                    lv = max(0, lp["strike"] - next_close)
+                    sv = max(0, sp["strike"] - next_close)
+                    pnl_per = (lv - sv) - cost_slip
+                    total_pnl = pnl_per * 100 * qty - comm * qty
+                    width = lp["strike"] - sp["strike"]
+                    trades.append({
+                        "name": "Put Debit Spread",
+                        "structure": TradeStructure.PUT_DEBIT_SPREAD,
+                        "long_strike": lp["strike"],
+                        "short_strike": sp["strike"],
+                        "long_delta": lp.get("put_delta", 0),
+                        "short_delta": sp.get("put_delta", 0),
+                        "entry_cost": round(cost_slip, 4),
+                        "width": width,
+                        "qty": qty,
+                        "max_risk": round(risk_per * qty, 2),
+                        "max_profit": round((width - cost_slip) * 100 * qty - comm * qty, 2),
+                        "pnl": round(total_pnl, 2),
+                        "comm": round(comm * qty, 2),
+                    })
+
+        # --- 7. Long Put ---
+        atm_puts = self._find_puts(strikes, cfg.long_put_delta, tol)
+        if atm_puts:
+            ap = atm_puts[0]
+            cost = ap.get("putAskPrice", 0)
+            if cost > 0:
+                cost_slip = cost * (1 + cfg.slippage)
+                comm = cfg.commission_per_leg
+                risk_per = cost_slip * 100 + comm
+                qty = max(1, int(max_risk / risk_per))
+                expiry_val = max(0, ap["strike"] - next_close)
+                pnl_per = expiry_val - cost_slip
+                total_pnl = pnl_per * 100 * qty - comm * qty
+                trades.append({
+                    "name": "Long Put",
+                    "structure": TradeStructure.LONG_PUT,
+                    "strike": ap["strike"],
+                    "delta": ap.get("put_delta", 0),
+                    "entry_cost": round(cost_slip, 4),
+                    "qty": qty,
+                    "max_risk": round(risk_per * qty, 2),
+                    "max_profit": None,
+                    "pnl": round(total_pnl, 2),
+                    "comm": round(comm * qty, 2),
+                })
+
         return trades
 
     # -- main backtest runner -------------------------------------------------
@@ -586,6 +653,168 @@ class TradeStructureBacktest(BaseAgent):
 
         return signal_days
 
+    # -- regime split printer ---------------------------------------------------
+
+    BULLISH_NAMES = [
+        "Call Debit Spread", "Bull Put Spread", "Long Call",
+        "Call Ratio Spread", "Broken Wing Butterfly",
+    ]
+    BEARISH_NAMES = [
+        "Put Debit Spread", "Long Put",
+    ]
+
+    @staticmethod
+    def _regime_stats(entries: List[Dict]) -> Dict:
+        """Compute stats for a list of trade entries."""
+        if not entries:
+            return {"n": 0, "win_pct": 0, "avg_pnl": 0, "total": 0, "sharpe": 0}
+        pnls = [e["pnl"] for e in entries]
+        n = len(pnls)
+        wins = [p for p in pnls if p > 0]
+        win_pct = len(wins) / n if n else 0
+        avg_pnl = sum(pnls) / n
+        total = sum(pnls)
+        if n > 1:
+            mean = avg_pnl
+            var = sum((p - mean) ** 2 for p in pnls) / (n - 1)
+            sharpe = mean / (var ** 0.5) if var > 0 else 0
+        else:
+            sharpe = 0
+        return {"n": n, "win_pct": win_pct, "avg_pnl": avg_pnl,
+                "total": total, "sharpe": sharpe}
+
+    def _print_regime_split(self, results: List[Dict],
+                            by_name: Dict[str, List[Dict]],
+                            all_names: List[str]) -> None:
+        """Show performance split by regime: bounce vs sell-through."""
+        bounce_results = [r for r in results if r["next_return"] > 0]
+        sellthru_results = [r for r in results if r["next_return"] <= 0]
+        n_bounce = len(bounce_results)
+        n_sellthru = len(sellthru_results)
+
+        if not bounce_results and not sellthru_results:
+            return
+
+        print(f"\n  {C.BOLD}{C.CYAN}{'=' * 78}{C.RESET}")
+        print(f"  {C.BOLD}REGIME SPLIT — Bounce ({n_bounce} days) "
+              f"vs Sell-Through ({n_sellthru} days){C.RESET}")
+        print(f"  {C.BOLD}{C.CYAN}{'=' * 78}{C.RESET}")
+
+        header = (f"  {'STRUCTURE':<24} {'BOUNCE':>6} {'WIN%':>5} {'AVG':>8} "
+                  f"{'TOTAL':>9}  {'SELL':>5} {'WIN%':>5} {'AVG':>8} {'TOTAL':>9}")
+        print(f"\n{header}")
+        print(f"  {'-' * 78}")
+
+        for name in all_names:
+            entries = by_name.get(name, [])
+            if not entries:
+                continue
+            bounce_e = [e for e in entries if e["next_return"] > 0]
+            sellthru_e = [e for e in entries if e["next_return"] <= 0]
+            bs = self._regime_stats(bounce_e)
+            ss = self._regime_stats(sellthru_e)
+
+            b_clr = C.GREEN if bs["total"] > 0 else C.RED
+            s_clr = C.GREEN if ss["total"] > 0 else C.RED
+            b_w = C.GREEN if bs["win_pct"] > 0.55 else C.RED if bs["win_pct"] < 0.45 else C.YELLOW
+            s_w = C.GREEN if ss["win_pct"] > 0.55 else C.RED if ss["win_pct"] < 0.45 else C.YELLOW
+
+            print(f"  {name:<24} "
+                  f"{bs['n']:>5}  {b_w}{bs['win_pct']:>4.0%}{C.RESET} "
+                  f"${bs['avg_pnl']:>+7.0f} {b_clr}${bs['total']:>+8.0f}{C.RESET}  "
+                  f"{ss['n']:>4}  {s_w}{ss['win_pct']:>4.0%}{C.RESET} "
+                  f"${ss['avg_pnl']:>+7.0f} {s_clr}${ss['total']:>+8.0f}{C.RESET}")
+
+        # Summary
+        if n_bounce:
+            avg_bounce = sum(r["next_return"] for r in bounce_results) / n_bounce * 100
+            print(f"\n  {C.GREEN}Bounce avg return: {avg_bounce:+.2f}%{C.RESET}")
+        if n_sellthru:
+            avg_sell = sum(r["next_return"] for r in sellthru_results) / n_sellthru * 100
+            print(f"  {C.RED}Sell-through avg return: {avg_sell:+.2f}%{C.RESET}")
+
+    def _print_flip_strategy(self, results: List[Dict]) -> None:
+        """Show Flip strategy: bullish on bounces, bearish on sell-throughs.
+
+        Two modes:
+          1. Oracle Flip (perfect hindsight) — best bullish on up days,
+             best bearish on down days. Shows the ceiling.
+          2. Signal Flip — always start bullish Adaptive pick,
+             but on sell-through days add best bearish P&L as the "flip" recovery.
+        """
+        if not results:
+            return
+
+        oracle_pnls = []
+        combined_pnls = []   # Adaptive bullish + bearish flip when wrong
+
+        for r in results:
+            trades = r["trades"]
+            if not trades:
+                continue
+
+            bullish_trades = [t for t in trades if t["name"] in self.BULLISH_NAMES]
+            bearish_trades = [t for t in trades if t["name"] in self.BEARISH_NAMES]
+
+            is_bounce = r["next_return"] > 0
+
+            # Oracle: pick best from correct direction
+            if is_bounce and bullish_trades:
+                best = max(bullish_trades, key=lambda t: t["pnl"])
+                oracle_pnls.append(best["pnl"])
+            elif not is_bounce and bearish_trades:
+                best = max(bearish_trades, key=lambda t: t["pnl"])
+                oracle_pnls.append(best["pnl"])
+            elif bullish_trades or bearish_trades:
+                # Fallback to whatever is available
+                all_t = bullish_trades + bearish_trades
+                best = max(all_t, key=lambda t: t["pnl"])
+                oracle_pnls.append(best["pnl"])
+
+            # Combined: Adaptive (bullish) P&L + bearish flip when losing
+            adaptive_pick = r.get("adaptive_pick")
+            adaptive_trade = None
+            if adaptive_pick:
+                for t in trades:
+                    if t.get("structure") == adaptive_pick:
+                        adaptive_trade = t
+                        break
+
+            if adaptive_trade:
+                bull_pnl = adaptive_trade["pnl"]
+                if bull_pnl < 0 and bearish_trades:
+                    # Flip: the bullish trade lost → add bearish recovery
+                    best_bear = max(bearish_trades, key=lambda t: t["pnl"])
+                    # Flip P&L = bull loss + bear gain (net)
+                    combined_pnls.append(bull_pnl + best_bear["pnl"])
+                else:
+                    combined_pnls.append(bull_pnl)
+
+        print(f"\n  {C.BOLD}{C.CYAN}{'=' * 78}{C.RESET}")
+        print(f"  {C.BOLD}FLIP STRATEGY — Bearish recovery on sell-through days{C.RESET}")
+        print(f"  {C.BOLD}{C.CYAN}{'=' * 78}{C.RESET}")
+
+        for label, pnls in [("Oracle Flip (hindsight)", oracle_pnls),
+                             ("Signal Flip (adaptive+bear)", combined_pnls)]:
+            if not pnls:
+                continue
+            n = len(pnls)
+            wins = [p for p in pnls if p > 0]
+            total = sum(pnls)
+            avg = total / n
+            win_pct = len(wins) / n
+            if n > 1:
+                var = sum((p - avg) ** 2 for p in pnls) / (n - 1)
+                sharpe = avg / (var ** 0.5) if var > 0 else 0
+            else:
+                sharpe = 0
+            clr = C.GREEN if total > 0 else C.RED
+            w_clr = C.GREEN if win_pct > 0.55 else C.RED if win_pct < 0.45 else C.YELLOW
+            print(f"\n  {C.BOLD}{label}{C.RESET}")
+            print(f"    Days: {n}  Win%: {w_clr}{win_pct:.0%}{C.RESET}  "
+                  f"Avg: ${avg:+,.0f}  Total: {clr}${total:+,.0f}{C.RESET}  "
+                  f"Sharpe: {sharpe:+.2f}")
+
     # -- results printer ------------------------------------------------------
 
     def _print_results(self, ticker: str, results: List[Dict],
@@ -695,6 +924,12 @@ class TradeStructureBacktest(BaseAgent):
         if best_total[0]:
             print(f"  {C.BOLD}Best total return:{C.RESET}  "
                   f"{best_total[0]} (${best_total[1]:+,.0f})")
+
+        # -- Regime split: bounce vs sell-through --
+        self._print_regime_split(results, by_name, all_names)
+
+        # -- Flip strategy (oracle + heuristic) --
+        self._print_flip_strategy(results)
 
         # Signal sizing summary
         if use_sizing:

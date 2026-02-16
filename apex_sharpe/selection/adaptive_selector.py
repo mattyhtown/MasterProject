@@ -101,6 +101,29 @@ class AdaptiveSelector:
         ranked.append((TradeStructure.BROKEN_WING_BUTTERFLY,
                         f"{core_count} signals, targeting pin", bwb_score))
 
+        # Put Debit Spread (bearish): best when high IV + steep skew
+        # (same conditions as BPS but opposite direction — for bearish signals)
+        pds_score = 0.0
+        if iv_rank > cfg.high_iv_rank:
+            pds_score += 2.0
+        if skew > cfg.high_skew:
+            pds_score += 2.0  # steep skew = rich put premium, but we're buying
+        if contango < 0.02:   # collapsing contango = near-term fear
+            pds_score += 2.0
+        ranked.append((TradeStructure.PUT_DEBIT_SPREAD,
+                        f"IV rank {iv_rank:.0f}, skew {skew:.4f}", pds_score))
+
+        # Long Put (bearish): best when IV low + strong bearish conviction
+        lput_score = 0.0
+        if iv_rank < cfg.low_iv_rank:
+            lput_score += 3.0  # cheap premium
+        if core_count >= 4:
+            lput_score += 2.0
+        if contango < 0.02:
+            lput_score += 1.0
+        ranked.append((TradeStructure.LONG_PUT,
+                        f"IV rank {iv_rank:.0f}, {core_count} signals", lput_score))
+
         # Sort by score descending
         ranked.sort(key=lambda x: x[2], reverse=True)
 
