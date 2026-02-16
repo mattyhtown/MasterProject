@@ -1,0 +1,29 @@
+version: "3.8"
+
+services:
+  apex-sharpe:
+    build: .
+    container_name: apex-sharpe
+    env_file: .env
+    environment:
+      - DOCKER_CONTAINER=1
+    command: ["python", "-m", "apex_sharpe", "full"]
+    restart: unless-stopped
+
+  monitor:
+    build: .
+    container_name: apex-sharpe-monitor
+    env_file: .env
+    environment:
+      - DOCKER_CONTAINER=1
+    command: ["python", "-m", "apex_sharpe", "monitor"]
+    restart: unless-stopped
+
+  health:
+    build: .
+    container_name: apex-sharpe-health
+    env_file: .env
+    environment:
+      - DOCKER_CONTAINER=1
+    command: ["python", "-m", "apex_sharpe", "health"]
+    restart: "no"

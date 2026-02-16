@@ -1,0 +1,11 @@
+# APEX-SHARPE dependencies
+# Core: stdlib-first (urllib, json, dataclasses, pathlib all built-in)
+
+# Market data
+yfinance>=0.2.31
+
+# Database (optional — system works without it)
+supabase>=2.0.0
+
+# Testing
+pytest>=8.0.0

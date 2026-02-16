@@ -1,0 +1,4 @@
+# Captured ORATS fixture data — regenerate with:
+#   python -m apex_sharpe.tests.fixtures.capture_fixtures
+*.json
+!_manifest.json

@@ -1,0 +1,28 @@
+{
+  "capture_date": "2026-02-15",
+  "files": [
+    "hist_spx_chain_0dte_20260211.json",
+    "hist_spx_chain_0dte_20260212.json",
+    "hist_spx_chain_0dte_20260213.json",
+    "hist_spx_chain_30dte_20260211.json",
+    "hist_spx_chain_30dte_20260212.json",
+    "hist_spx_chain_30dte_20260213.json",
+    "hist_spx_summary_20260211.json",
+    "hist_spx_summary_20260212.json",
+    "hist_spx_summary_20260213.json",
+    "hist_spy_dailies_20260211.json",
+    "hist_spy_dailies_20260212.json",
+    "hist_spy_dailies_20260213.json",
+    "hyg_summaries.json",
+    "spx_chain_31dte.json",
+    "spx_expirations.json",
+    "spx_ivrank.json",
+    "spx_summaries.json",
+    "spy_chain_40dte.json",
+    "spy_expirations.json",
+    "spy_ivrank.json",
+    "spy_summaries.json",
+    "tlt_summaries.json"
+  ],
+  "count": 22
+}
