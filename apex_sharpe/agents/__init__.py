@@ -24,6 +24,12 @@ from .strategy import (
     BrokenWingButterflyAgent,
 )
 from .ops import PerformanceAgent, LatencyAgent, SecurityAgent, InfraAgent
+from .backtest import ExtendedBacktest, RegimeClassifier
+from .research import (
+    DataCatalogAgent, ResearchAgent, LibrarianAgent,
+    PatternAgent, MacroAgent, StrategyDevAgent,
+    NoveltyAgent, DataScoutAgent,
+)
 
 __all__ = [
     # Core agents
@@ -55,4 +61,16 @@ __all__ = [
     "LatencyAgent",
     "SecurityAgent",
     "InfraAgent",
+    # Backtest agents
+    "ExtendedBacktest",
+    "RegimeClassifier",
+    # Research agents
+    "DataCatalogAgent",
+    "ResearchAgent",
+    "LibrarianAgent",
+    "PatternAgent",
+    "MacroAgent",
+    "StrategyDevAgent",
+    "NoveltyAgent",
+    "DataScoutAgent",
 ]

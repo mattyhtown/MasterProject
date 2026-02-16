@@ -1,19 +1,21 @@
 # APEX-SHARPE
 
-Multi-agent options trading system built on ORATS data. 21 agents, 4 pipelines, 19 CLI modes, 130 tests.
+Multi-agent options trading and research system. 29 agents, 4 pipelines, 27 CLI modes, 217 tests.
 
 ## Architecture
 
 ```
 apex_sharpe/
-  agents/           21 agents (BaseAgent ABC pattern)
+  agents/           29 agents (BaseAgent ABC pattern)
     ops/            Performance, Latency, Security, Infra
     strategy/       CDS, BPS, LongCall, CRS, BWB
+    backtest/       ExtendedBacktest, RegimeClassifier
+    research/       DataCatalog, Research, Librarian, Pattern, Macro, StrategyDev
   pipelines/        IC, ZeroDTE, Directional, LEAPS
-  data/             ORATSClient, StateManager, yfinance
+  data/             ORATSClient, StateManager, HistoricalLoader, yfinance
   selection/        SignalSizer, AdaptiveSelector
   database/         SupabaseSync
-  tests/            130 tests (all synthetic data)
+  tests/            217 tests
 ```
 
 ### Agent Registry
@@ -42,6 +44,14 @@ apex_sharpe/
 | Latency | LOW | API latency benchmarking |
 | Security | LOW | Config auditing and anomaly detection |
 | Infra | LOW | Infrastructure health checks |
+| ExtendedBacktest | LOW | Extended signal backtesting with historical data |
+| RegimeClassifier | LOW | VIX/trend-based regime classification |
+| DataCatalog | LOW | Catalogs all historical data with quality metrics |
+| Research | LOW | Cross-asset correlation, drawdown, screening |
+| Librarian | LOW | Scientific data formatting and report generation |
+| PatternFinder | LOW | Seasonal, mean reversion, momentum patterns |
+| Macro | LOW | Cross-asset macro analysis and risk regime |
+| StrategyDev | LOW | Strategy development and validation |
 
 ### 0DTE Signal System
 
@@ -50,6 +60,10 @@ apex_sharpe/
 **Core 5:** skewing, rip, skew_25d_rr, contango, credit_spread (HYG-TLT)
 
 **Supplemental 5:** iv_rv_spread, fbfwd, rSlp30, fwd_kink, rDrv30
+
+### Historical Data Archive
+
+508 tickers across 8 asset classes with full OHLCV + technicals (SMA, RSI, MACD, BB, ATR, volatility). SPY from 1993, VIX from 1990, 20 hourly tickers, 22 economic indicator files.
 
 ## Setup
 
@@ -98,6 +112,16 @@ python -m apex_sharpe perf              # Strategy performance validation
 python -m apex_sharpe latency           # API latency benchmark
 python -m apex_sharpe security          # Security audit
 python -m apex_sharpe health            # Infrastructure health check
+
+# Research & Backtesting
+python -m apex_sharpe backtest-ext [months]             # Extended signal backtest
+python -m apex_sharpe regime [months]                   # Regime classification
+python -m apex_sharpe walk-forward [months]             # Walk-forward validation
+python -m apex_sharpe catalog summary|inspect|quality   # Data catalog
+python -m apex_sharpe research correlation|returns|drawdown|compare|screen
+python -m apex_sharpe patterns seasonal|mr|momentum|events|vol [ticker]
+python -m apex_sharpe macro dashboard|risk|yield|rotation|signals
+python -m apex_sharpe strategy-scan [ticker]            # Strategy development
 ```
 
 ## Docker
@@ -113,4 +137,4 @@ docker compose up                       # Runs trading + monitor + health
 - **ORATS API** — options data, vol surface, IV rank, historical chains
 - **yfinance** — spot price cross-checks
 - **Supabase** — optional trade persistence
-- **pytest** — 130 tests
+- **pytest** — 217 tests

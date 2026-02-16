@@ -260,6 +260,20 @@ class InfraCfg:
 
 
 @dataclass(frozen=True)
+class HistoricalDataCfg:
+    """Historical data archive settings."""
+    data_dir: str = ""  # Path to extracted market_data/ directory
+
+
+@dataclass(frozen=True)
+class ResearchCfg:
+    """Research agent settings."""
+    default_lookback_months: int = 24
+    screen_min_days: int = 60
+    correlation_min_overlap: int = 120
+
+
+@dataclass(frozen=True)
 class StateCfg:
     positions_path: str = "/Users/mh/positions.json"
     signals_path: str = ""    # resolved at load time
@@ -298,6 +312,9 @@ class AppConfig:
     latency: LatencyCfg = field(default_factory=LatencyCfg)
     security: SecurityCfg = field(default_factory=SecurityCfg)
     infra: InfraCfg = field(default_factory=InfraCfg)
+    # Research
+    historical_data: HistoricalDataCfg = field(default_factory=HistoricalDataCfg)
+    research: ResearchCfg = field(default_factory=ResearchCfg)
 
 
 def load_config() -> AppConfig:
@@ -305,6 +322,20 @@ def load_config() -> AppConfig:
     _load_env()
 
     home = str(Path.home())
+
+    # Auto-detect historical data directory
+    data_dir = _env("HISTORICAL_DATA_DIR")
+    if not data_dir:
+        # Check common locations
+        pkg_dir = Path(__file__).resolve().parent.parent
+        candidates = [
+            pkg_dir / "market_data",
+            Path(home) / "market_data",
+        ]
+        for p in candidates:
+            if p.exists() and (p / "data").exists():
+                data_dir = str(p)
+                break
 
     return AppConfig(
         orats=OratsCfg(
@@ -317,5 +348,8 @@ def load_config() -> AppConfig:
         state=StateCfg(
             signals_path=str(Path(home) / "0dte_signals.json"),
             cache_path=str(Path(home) / ".0dte_backtest_cache.json"),
+        ),
+        historical_data=HistoricalDataCfg(
+            data_dir=data_dir,
         ),
     )

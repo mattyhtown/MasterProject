@@ -21,6 +21,17 @@ Usage:
     python -m apex_sharpe latency         — API latency benchmark
     python -m apex_sharpe security        — Security audit
     python -m apex_sharpe health          — Infrastructure health check
+    python -m apex_sharpe backtest-ext    — Extended signal backtest (historical)
+    python -m apex_sharpe regime          — Regime classification analysis
+    python -m apex_sharpe walk-forward    — Walk-forward validation
+    python -m apex_sharpe catalog         — Historical data catalog
+    python -m apex_sharpe research        — Cross-asset research analysis
+    python -m apex_sharpe patterns        — Pattern finding (seasonal, MR, momentum)
+    python -m apex_sharpe macro           — Macro dashboard and risk regime
+    python -m apex_sharpe strategy-scan   — Scan for new strategy candidates
+    python -m apex_sharpe novelty         — Novelty / anomaly / lead-lag discovery
+    python -m apex_sharpe scout           — External dataset scouting
+    python -m apex_sharpe hierarchy       — Agent hierarchy and division structure
 """
 
 import sys
@@ -58,6 +69,19 @@ Ops & Infrastructure:
   latency         API latency benchmarking
   security        Security audit (config, positions, permissions)
   health          Infrastructure health check
+
+Research & Backtesting:
+  backtest-ext    Extended signal backtest on historical data
+  regime          VIX/trend regime classification
+  walk-forward    Rolling train/test walk-forward validation
+  catalog         Historical data catalog and quality check
+  research        Cross-asset correlation, drawdown, screening
+  patterns        Seasonal, mean reversion, momentum patterns
+  macro           Macro dashboard and risk regime detection
+  strategy-scan   Scan for new strategy candidates
+  novelty         Novelty / anomaly / lead-lag discovery
+  scout           External dataset scouting and recommendations
+  hierarchy       Agent hierarchy and division structure
 """
 
 
@@ -281,6 +305,295 @@ def main() -> None:
         agent = InfraAgent(config.infra)
         result = agent.run({"orats": orats})
         agent.print_report(result)
+
+    # -- Research & Backtesting -----------------------------------------------
+
+    elif mode in ("backtest-ext", "backtest-extended"):
+        from .data.historical_loader import HistoricalLoader
+        from .agents.backtest import ExtendedBacktest
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = ExtendedBacktest()
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 24
+        result = agent.run({
+            "action": "signal_history",
+            "loader": loader,
+            "months": months,
+        })
+        agent.print_report(result)
+
+    elif mode == "regime":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.backtest import ExtendedBacktest, RegimeClassifier
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = ExtendedBacktest()
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 24
+        result = agent.run({
+            "action": "regime",
+            "loader": loader,
+            "months": months,
+        })
+        RegimeClassifier().print_report(result)
+
+    elif mode == "walk-forward":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.backtest import ExtendedBacktest
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = ExtendedBacktest()
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 24
+        result = agent.run({
+            "action": "walk_forward",
+            "loader": loader,
+            "total_months": months,
+        })
+        agent.print_walk_forward(result)
+
+    elif mode == "catalog":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import DataCatalogAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = DataCatalogAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "summary"
+        if sub == "summary":
+            result = agent.run({"action": "summary", "loader": loader})
+            agent.print_catalog(result)
+        elif sub == "inspect":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({"action": "inspect", "loader": loader, "ticker": ticker})
+            agent.print_inspect(result)
+        elif sub == "quality":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({"action": "quality", "loader": loader, "ticker": ticker})
+            agent.print_quality(result)
+        elif sub == "search":
+            query = sys.argv[3] if len(sys.argv) > 3 else ""
+            result = agent.run({"action": "search", "loader": loader, "query": query})
+            for r in result.data.get("results", []):
+                print(f"  {r['ticker']:<10} {r['asset_class']:<15}"
+                      f" {r['rows']:>6} rows  {r['start']} to {r['end']}")
+        else:
+            print("catalog sub-commands: summary, inspect [ticker], quality [ticker], search [query]")
+
+    elif mode == "research":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import ResearchAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = ResearchAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "correlation"
+        if sub == "correlation":
+            tickers = sys.argv[3].split(",") if len(sys.argv) > 3 else ["SPY", "QQQ", "IWM", "TLT", "GLD"]
+            result = agent.run({"action": "correlation", "loader": loader, "tickers": tickers})
+            agent.print_correlation(result)
+        elif sub == "returns":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({"action": "returns", "loader": loader, "ticker": ticker})
+            agent.print_returns(result)
+        elif sub == "drawdown":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({"action": "drawdown", "loader": loader, "ticker": ticker})
+            d = result.data
+            print(f"\n  Drawdown Analysis: {d.get('ticker', '?')}")
+            print(f"  Max drawdown: {d.get('max_drawdown_pct', 0):.2f}%")
+            print(f"  Current drawdown: {d.get('current_drawdown_pct', 0):.2f}%")
+            peak = d.get("max_dd_peak", {})
+            trough = d.get("max_dd_trough", {})
+            print(f"  Worst: {peak.get('date', '?')} (${peak.get('price', 0):,.2f})"
+                  f" to {trough.get('date', '?')} (${trough.get('price', 0):,.2f})")
+        elif sub == "compare":
+            tickers = sys.argv[3].split(",") if len(sys.argv) > 3 else ["SPY", "QQQ", "IWM"]
+            result = agent.run({"action": "compare", "loader": loader, "tickers": tickers})
+            agent.print_compare(result)
+        elif sub == "screen":
+            result = agent.run({
+                "action": "screen", "loader": loader,
+                "min_sharpe": float(sys.argv[3]) if len(sys.argv) > 3 else 0.5,
+            })
+            for r in result.data.get("results", [])[:20]:
+                print(f"  {r['ticker']:<10} {r['asset_class']:<15}"
+                      f" ret {r['return_pct']:>+8.2f}%  vol {r['vol_pct']:>6.2f}%"
+                      f"  sharpe {r['sharpe']:>6.3f}")
+        else:
+            print("research sub-commands: correlation [t1,t2,...], returns [ticker],"
+                  " drawdown [ticker], compare [t1,t2,...], screen [min_sharpe]")
+
+    elif mode == "patterns":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import PatternAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = PatternAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "seasonal"
+        ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+        if sub == "seasonal":
+            result = agent.run({"action": "seasonal", "loader": loader, "ticker": ticker})
+            agent.print_seasonal(result)
+        elif sub in ("mr", "mean-reversion"):
+            result = agent.run({"action": "mean_reversion", "loader": loader, "ticker": ticker})
+            agent.print_setups(result)
+        elif sub == "momentum":
+            result = agent.run({"action": "momentum", "loader": loader, "ticker": ticker})
+            agent.print_setups(result)
+        elif sub in ("events", "post-event"):
+            result = agent.run({"action": "post_event", "loader": loader, "ticker": ticker})
+            agent.print_setups(result)
+        elif sub in ("vol", "vol-clustering"):
+            result = agent.run({"action": "vol_clustering", "loader": loader, "ticker": ticker})
+            d = result.data
+            print(f"\n  Vol Clustering: {d.get('ticker', '?')}")
+            print(f"  ACF lag-1: {d.get('abs_return_acf_lag1', 0):.4f}")
+            print(f"  Clustering ratio: {d.get('clustering_ratio', 0):.3f}")
+            print(f"  Interpretation: {d.get('interpretation', '?')}")
+        else:
+            print("patterns sub-commands: seasonal [ticker], mr [ticker],"
+                  " momentum [ticker], events [ticker], vol [ticker]")
+
+    elif mode == "macro":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import MacroAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = MacroAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "dashboard"
+        if sub == "dashboard":
+            result = agent.run({"action": "dashboard", "loader": loader})
+            agent.print_dashboard(result)
+        elif sub in ("risk", "risk-regime"):
+            result = agent.run({"action": "risk_regime", "loader": loader})
+            agent.print_risk_regime(result)
+        elif sub in ("yield", "yield-curve"):
+            result = agent.run({"action": "yield_curve", "loader": loader})
+            d = result.data
+            print(f"\n  Yield Curve Analysis")
+            print(f"  Available tenors: {', '.join(d.get('available_tenors', []))}")
+            print(f"  Inverted days: {d.get('inverted_days', 0)}"
+                  f" ({d.get('inversion_pct', 0):.1f}%)")
+            current = d.get("current", {})
+            if current:
+                print(f"  Current 10y-3m spread: {current.get('spread_10y_3m', 0):.4f}")
+        elif sub == "rotation":
+            days = int(sys.argv[3]) if len(sys.argv) > 3 else 60
+            result = agent.run({"action": "rotation", "loader": loader, "lookback_days": days})
+            d = result.data
+            print(f"\n  Sector Rotation ({d.get('lookback_days', 60)}d lookback)")
+            print(f"  {d.get('leadership', '')}")
+            for p in d.get("performances", []):
+                clr = "\033[92m" if p["return_pct"] > 0 else "\033[91m"
+                print(f"  {p['label']:<18} {p['ticker']:<6}"
+                      f" {clr}{p['return_pct']:>+7.2f}%\033[0m"
+                      f"  sharpe {p['sharpe']:.3f}")
+        elif sub in ("signals", "cross-asset"):
+            result = agent.run({"action": "cross_asset", "loader": loader})
+            for s in result.data.get("signals", []):
+                sig_clr = ("\033[91m" if "DIVERGENCE" in s["signal"]
+                           else "\033[93m" if s["signal"] != "NORMAL"
+                           else "\033[92m")
+                print(f"  {s['pair']:<22} {s['tickers']:<12}"
+                      f" z={s['ratio_z_score']:>+5.2f}"
+                      f"  corr={s['recent_correlation']:>+6.4f}"
+                      f"  {sig_clr}{s['signal']}\033[0m")
+        else:
+            print("macro sub-commands: dashboard, risk, yield, rotation [days], signals")
+
+    elif mode in ("strategy-scan", "strategy_scan"):
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import StrategyDevAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = StrategyDevAgent()
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPY"
+        result = agent.run({
+            "action": "scan_strategies",
+            "loader": loader,
+            "ticker": ticker,
+        })
+        agent.print_scan(result)
+
+    elif mode == "novelty":
+        from .data.historical_loader import HistoricalLoader
+        from .agents.research import NoveltyAgent
+        loader = HistoricalLoader(config.historical_data.data_dir)
+        agent = NoveltyAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "scan"
+        if sub == "scan":
+            target = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({
+                "action": "scan", "loader": loader, "target": target,
+            })
+            agent.print_scan(result)
+        elif sub == "anomalies":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({
+                "action": "anomalies", "loader": loader, "ticker": ticker,
+            })
+            d = result.data
+            print(f"\n  Anomalies: {d.get('ticker', '?')}")
+            for a in d.get("anomalies", [])[:15]:
+                print(f"    {a.get('date', '?')} {a.get('type', '?'):<20}"
+                      f" z={a.get('z_score', 0):>+6.2f}")
+        elif sub in ("lead-lag", "lead_lag"):
+            target = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({
+                "action": "lead_lag", "loader": loader, "target": target,
+            })
+            agent.print_lead_lag(result)
+        elif sub in ("regime-breaks", "regime_breaks"):
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({
+                "action": "regime_breaks", "loader": loader, "ticker": ticker,
+            })
+            d = result.data
+            print(f"\n  Regime Breaks: {d.get('ticker', '?')}")
+            for b in d.get("breaks", []):
+                print(f"    {b.get('date', '?')} t-stat={b.get('t_stat', 0):>+6.2f}"
+                      f"  before={b.get('mean_before', 0):>+.4f}"
+                      f"  after={b.get('mean_after', 0):>+.4f}")
+        elif sub in ("hidden-factors", "hidden_factors"):
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            result = agent.run({
+                "action": "hidden_factors", "loader": loader, "ticker": ticker,
+            })
+            agent.print_factors(result)
+        elif sub == "underexplored":
+            result = agent.run({
+                "action": "underexplored", "loader": loader,
+            })
+            for t in result.data.get("underexplored", [])[:20]:
+                print(f"  {t['ticker']:<12} {t['asset_class']:<15}"
+                      f" sharpe={t['sharpe']:>+6.3f}  vol={t['vol_pct']:>6.1f}%")
+        else:
+            print("novelty sub-commands: scan [target], anomalies [ticker],"
+                  " lead-lag [target], regime-breaks [ticker],"
+                  " hidden-factors [ticker], underexplored")
+
+    elif mode == "scout":
+        from .agents.research import DataScoutAgent
+        agent = DataScoutAgent()
+        sub = sys.argv[2] if len(sys.argv) > 2 else "catalog"
+        if sub == "catalog":
+            result = agent.run({"action": "catalog"})
+            agent.print_catalog(result)
+        elif sub == "recommend":
+            result = agent.run({"action": "recommend"})
+            agent.print_recommend(result)
+        elif sub == "evaluate":
+            source = sys.argv[3] if len(sys.argv) > 3 else "fred_gdp"
+            result = agent.run({"action": "evaluate", "source_id": source})
+            d = result.data
+            print(f"\n  Source: {d.get('name', source)}")
+            print(f"  Category: {d.get('category', '?')}")
+            print(f"  URL: {d.get('url', '?')}")
+            print(f"  Update frequency: {d.get('update_freq', '?')}")
+            print(f"  History depth: {d.get('history_depth', '?')}")
+            print(f"  Alpha potential: {d.get('alpha_potential', '?')}")
+            print(f"  Integration effort: {d.get('integration_effort', '?')}")
+        elif sub == "gaps":
+            from .data.historical_loader import HistoricalLoader
+            loader = HistoricalLoader(config.historical_data.data_dir)
+            result = agent.run({"action": "gaps", "loader": loader})
+            agent.print_gaps(result)
+        else:
+            print("scout sub-commands: catalog, recommend, evaluate [source_id], gaps")
+
+    elif mode == "hierarchy":
+        from .agents.manager import AgentManager
+        mgr = AgentManager()
+        mgr.print_hierarchy()
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

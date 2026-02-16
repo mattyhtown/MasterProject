@@ -227,6 +227,88 @@ AGENT_REGISTRY: List[AgentCapability] = [
         risk_level=RiskLevel.LOW,
         description="Infrastructure health checks and deployment readiness",
     ),
+    # Backtest agents
+    AgentCapability(
+        "ExtendedBacktest", "ExtendedBacktest",
+        data_sources=["historical_csv"],
+        signal_systems=["credit_market", "vol_surface"],
+        trade_actions=["backtest_signals", "walk_forward"],
+        risk_level=RiskLevel.LOW,
+        description="Extended signal backtesting with historical price data",
+    ),
+    AgentCapability(
+        "RegimeClassifier", "RegimeClassifier",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["classify_regime", "transition_matrix"],
+        risk_level=RiskLevel.LOW,
+        description="VIX/trend-based regime classification and analysis",
+    ),
+    # Research agents
+    AgentCapability(
+        "DataCatalog", "DataCatalogAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["catalog", "inspect", "quality_check"],
+        risk_level=RiskLevel.LOW,
+        description="Catalogs all available historical data with quality metrics",
+    ),
+    AgentCapability(
+        "Research", "ResearchAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["correlation", "drawdown", "screen"],
+        risk_level=RiskLevel.LOW,
+        description="Cross-asset correlation, return, and drawdown analysis",
+    ),
+    AgentCapability(
+        "Librarian", "LibrarianAgent",
+        data_sources=[],
+        signal_systems=[],
+        trade_actions=["format_report", "research_note"],
+        risk_level=RiskLevel.LOW,
+        description="Scientific data formatting and report generation",
+    ),
+    AgentCapability(
+        "PatternFinder", "PatternAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["seasonal", "mean_reversion", "momentum", "post_event"],
+        risk_level=RiskLevel.LOW,
+        description="Finds seasonal, mean reversion, and momentum patterns",
+    ),
+    AgentCapability(
+        "Macro", "MacroAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["macro_dashboard", "risk_regime", "yield_curve", "rotation"],
+        risk_level=RiskLevel.LOW,
+        description="Cross-asset macro analysis and risk regime detection",
+    ),
+    AgentCapability(
+        "StrategyDev", "StrategyDevAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["scan_strategies", "test_strategy", "compare"],
+        risk_level=RiskLevel.LOW,
+        description="Develops and validates new trading strategies from data",
+    ),
+    AgentCapability(
+        "Novelty", "NoveltyAgent",
+        data_sources=["historical_csv"],
+        signal_systems=[],
+        trade_actions=["anomaly_scan", "lead_lag", "regime_breaks", "hidden_factors"],
+        risk_level=RiskLevel.LOW,
+        description="Discovers anomalies, lead/lag relationships, and hidden factors",
+    ),
+    AgentCapability(
+        "DataScout", "DataScoutAgent",
+        data_sources=["external_catalogs"],
+        signal_systems=[],
+        trade_actions=["catalog_external", "recommend_sources", "coverage_gaps"],
+        risk_level=RiskLevel.LOW,
+        description="Scouts external datasets (climate, conflict, sentiment, macro)",
+    ),
 ]
 
 
@@ -266,6 +348,123 @@ STRATEGY_VALIDATION_CHECKLIST = [
 ]
 
 
+# -- Agent Hierarchy -------------------------------------------------------
+# Defines how all agents are organized into divisions, groups, and
+# reporting chains.  The hierarchy is the single source of truth for
+# the org chart printed by `python -m apex_sharpe hierarchy`.
+
+AGENT_HIERARCHY = {
+    "name": "AgentManager",
+    "role": "Meta-orchestrator",
+    "description": "Top-level coordinator — registry, checklists, hierarchy",
+    "divisions": [
+        {
+            "name": "Trading",
+            "lead": "Portfolio",
+            "description": "Signal generation, trade execution, position management",
+            "groups": [
+                {
+                    "name": "Signal Generation",
+                    "agents": ["Scanner", "ZeroDTE"],
+                    "description": "Scan markets and generate trade signals",
+                },
+                {
+                    "name": "Strategy Selection",
+                    "agents": [
+                        "CallDebitSpread", "BullPutSpread", "LongCall",
+                        "CallRatioSpread", "BrokenWingButterfly",
+                    ],
+                    "description": "Build optimal trade structures per signal",
+                },
+                {
+                    "name": "Execution",
+                    "agents": ["Risk", "Executor"],
+                    "description": "Risk-gate and execute approved trades",
+                },
+                {
+                    "name": "Position Management",
+                    "agents": ["Monitor", "LEAPS"],
+                    "description": "Track open positions and manage exits",
+                },
+            ],
+        },
+        {
+            "name": "Portfolio",
+            "lead": "Portfolio",
+            "description": "Capital allocation, margin, tax, treasury",
+            "groups": [
+                {
+                    "name": "Capital Management",
+                    "agents": ["Portfolio", "Margin", "Treasury"],
+                    "description": "Allocate capital across tiers and manage reserves",
+                },
+                {
+                    "name": "Tax & Compliance",
+                    "agents": ["Tax"],
+                    "description": "Tax optimization, wash sale monitoring, 1256 tracking",
+                },
+            ],
+        },
+        {
+            "name": "Research",
+            "lead": "DataCatalog",
+            "description": "Data analysis, backtesting, strategy development",
+            "groups": [
+                {
+                    "name": "Data Management",
+                    "agents": ["DataCatalog", "DataScout", "Librarian"],
+                    "description": "Catalog, format, and discover new data sources",
+                },
+                {
+                    "name": "Analysis",
+                    "agents": ["Research", "PatternFinder", "Macro"],
+                    "description": "Cross-asset correlation, pattern, and macro analysis",
+                },
+                {
+                    "name": "Backtesting",
+                    "agents": ["ExtendedBacktest", "RegimeClassifier"],
+                    "description": "Historical signal validation and regime classification",
+                },
+                {
+                    "name": "Discovery",
+                    "agents": ["Novelty", "StrategyDev"],
+                    "description": "Find new anomalies, signals, and strategy candidates",
+                },
+            ],
+        },
+        {
+            "name": "Ops",
+            "lead": "Infra",
+            "description": "Infrastructure health, performance, and security",
+            "groups": [
+                {
+                    "name": "Monitoring",
+                    "agents": ["Performance", "Latency"],
+                    "description": "Strategy drift detection and API latency tracking",
+                },
+                {
+                    "name": "Security & Infra",
+                    "agents": ["Security", "Infra"],
+                    "description": "Config auditing, health checks, deployment readiness",
+                },
+            ],
+        },
+        {
+            "name": "Data Services",
+            "lead": "Database",
+            "description": "Persistence, notifications, shared services",
+            "groups": [
+                {
+                    "name": "Shared Services",
+                    "agents": ["Database", "Reporter"],
+                    "description": "Supabase persistence and terminal/macOS notifications",
+                },
+            ],
+        },
+    ],
+}
+
+
 class AgentManager(BaseAgent):
     """Meta-agent that manages all other agents.
 
@@ -278,12 +477,14 @@ class AgentManager(BaseAgent):
         self.registry = {cap.agent_name: cap for cap in AGENT_REGISTRY}
         self._validation_status: Dict[str, Dict] = {}
         self._backtest_schedule: Dict[str, str] = {}
+        self.hierarchy = AGENT_HIERARCHY
 
     def run(self, context: Dict[str, Any]) -> AgentResult:
         """Manager operations.
 
         Context keys:
-            action: str — 'status', 'checklist', 'validate', 'capabilities'
+            action: str — 'status', 'checklist', 'validate', 'capabilities',
+                          'hierarchy'
             agent_name: str (for agent-specific queries)
             trade: Dict (for checklist validation)
         """
@@ -298,6 +499,8 @@ class AgentManager(BaseAgent):
         elif action == "capabilities":
             agent = context.get("agent_name")
             return self._agent_capabilities(agent)
+        elif action == "hierarchy":
+            return self._get_hierarchy()
         else:
             return self._result(success=False,
                                 errors=[f"Unknown action: {action}"])
@@ -478,4 +681,126 @@ class AgentManager(BaseAgent):
               f"{len(POST_TRADE_CHECKLIST)} items")
         print(f"  {C.BOLD}Strategy Validation:{C.RESET} "
               f"{len(STRATEGY_VALIDATION_CHECKLIST)} items")
+        print()
+
+    # -- Hierarchy ----------------------------------------------------------
+
+    def _get_hierarchy(self) -> AgentResult:
+        """Return the full hierarchy as structured data."""
+        total_agents = sum(
+            len(a)
+            for div in self.hierarchy["divisions"]
+            for g in div["groups"]
+            for a in [g["agents"]]
+        )
+        # Deduplicate (Portfolio appears in Trading + Portfolio divisions)
+        all_agents = set()
+        for div in self.hierarchy["divisions"]:
+            for g in div["groups"]:
+                all_agents.update(g["agents"])
+        return self._result(
+            success=True,
+            data={
+                "hierarchy": self.hierarchy,
+                "divisions": len(self.hierarchy["divisions"]),
+                "unique_agents": len(all_agents),
+                "total_slots": total_agents,
+            },
+        )
+
+    def print_hierarchy(self) -> None:
+        """Pretty-print the full agent hierarchy."""
+        h = self.hierarchy
+        W = 78
+
+        print(f"\n{C.BOLD}{C.CYAN}{'=' * W}{C.RESET}")
+        print(f"  {C.BOLD}APEX-SHARPE AGENT HIERARCHY{C.RESET}")
+        print(f"{C.BOLD}{C.CYAN}{'=' * W}{C.RESET}")
+
+        # Top level
+        print(f"\n  {C.BOLD}{C.MAGENTA}{h['name']}{C.RESET}"
+              f" {C.DIM}({h['role']}){C.RESET}")
+        print(f"  {C.DIM}{h['description']}{C.RESET}")
+
+        for div in h["divisions"]:
+            # Division header
+            lead_cap = self.registry.get(div["lead"])
+            lead_risk = ""
+            if lead_cap:
+                risk_clr = (C.RED if lead_cap.risk_level == RiskLevel.HIGH
+                            else C.YELLOW if lead_cap.risk_level == RiskLevel.MEDIUM
+                            else C.GREEN)
+                lead_risk = f" {risk_clr}[{lead_cap.risk_level.value}]{C.RESET}"
+
+            print(f"\n  {C.BOLD}{C.CYAN}{'─' * W}{C.RESET}")
+            print(f"  {C.BOLD}{div['name'].upper()} DIVISION{C.RESET}"
+                  f"  {C.DIM}lead: {div['lead']}{C.RESET}{lead_risk}")
+            print(f"  {C.DIM}{div['description']}{C.RESET}")
+
+            for group in div["groups"]:
+                print(f"\n    {C.BOLD}{C.YELLOW}{group['name']}{C.RESET}"
+                      f"  {C.DIM}— {group['description']}{C.RESET}")
+
+                for agent_name in group["agents"]:
+                    cap = self.registry.get(agent_name)
+                    if not cap:
+                        print(f"      {C.RED}? {agent_name} (not registered){C.RESET}")
+                        continue
+
+                    risk_clr = (C.RED if cap.risk_level == RiskLevel.HIGH
+                                else C.YELLOW if cap.risk_level == RiskLevel.MEDIUM
+                                else C.GREEN)
+                    appr = f" {C.RED}*{C.RESET}" if cap.requires_approval else ""
+                    actions = ", ".join(cap.trade_actions[:3])
+                    if len(cap.trade_actions) > 3:
+                        actions += f" +{len(cap.trade_actions) - 3}"
+
+                    print(f"      {risk_clr}●{C.RESET} {agent_name:<22}"
+                          f" {C.DIM}{actions}{C.RESET}{appr}")
+
+        # Summary
+        all_agents = set()
+        for div in h["divisions"]:
+            for g in div["groups"]:
+                all_agents.update(g["agents"])
+        unregistered = all_agents - set(self.registry.keys())
+
+        print(f"\n  {C.BOLD}{C.CYAN}{'─' * W}{C.RESET}")
+        print(f"  {C.BOLD}Summary{C.RESET}")
+        print(f"    Divisions:  {len(h['divisions'])}")
+        print(f"    Agents:     {len(all_agents)} unique"
+              f" ({len(self.registry)} registered)")
+
+        by_risk = {"low": 0, "medium": 0, "high": 0}
+        approval_needed = []
+        for name in all_agents:
+            cap = self.registry.get(name)
+            if cap:
+                by_risk[cap.risk_level.value] += 1
+                if cap.requires_approval:
+                    approval_needed.append(name)
+
+        print(f"    Risk:       {C.GREEN}{by_risk['low']} low{C.RESET}, "
+              f"{C.YELLOW}{by_risk['medium']} medium{C.RESET}, "
+              f"{C.RED}{by_risk['high']} high{C.RESET}")
+
+        if approval_needed:
+            print(f"    Approval:   {C.RED}{', '.join(sorted(approval_needed))}{C.RESET}")
+
+        if unregistered:
+            print(f"    {C.RED}Unregistered: {', '.join(sorted(unregistered))}{C.RESET}")
+
+        # Data flow summary
+        print(f"\n  {C.BOLD}Data Flow{C.RESET}")
+        print(f"    {C.DIM}Signals{C.RESET}    Scanner, ZeroDTE"
+              f" {C.DIM}→{C.RESET} Risk {C.DIM}→{C.RESET} Executor"
+              f" {C.DIM}→{C.RESET} Monitor")
+        print(f"    {C.DIM}Research{C.RESET}   DataCatalog"
+              f" {C.DIM}→{C.RESET} Research, Pattern, Macro"
+              f" {C.DIM}→{C.RESET} StrategyDev"
+              f" {C.DIM}→{C.RESET} Backtest")
+        print(f"    {C.DIM}Portfolio{C.RESET}  Portfolio"
+              f" {C.DIM}→{C.RESET} Margin, Treasury, Tax")
+        print(f"    {C.DIM}Services{C.RESET}   Database, Reporter"
+              f" {C.DIM}← all divisions{C.RESET}")
         print()
