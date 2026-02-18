@@ -373,6 +373,228 @@ CREATE INDEX idx_alerts_triggered_at ON alerts(triggered_at);
 CREATE INDEX idx_alerts_is_acknowledged ON alerts(is_acknowledged);
 
 -- ============================================================================
+-- 11. ZERO_DTE_SIGNALS TABLE (0DTE signal snapshots)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS zero_dte_signals (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Identification
+    ticker VARCHAR(10) NOT NULL,
+    trade_date DATE NOT NULL,
+
+    -- Price
+    spot_price DECIMAL(10,2),
+
+    -- Composite signal
+    composite VARCHAR(50),  -- FEAR_BOUNCE_STRONG, MULTI_SIGNAL_STRONG, etc.
+
+    -- Group counts
+    core_count INTEGER DEFAULT 0,
+    wing_count INTEGER DEFAULT 0,
+    fund_count INTEGER DEFAULT 0,
+    mom_count INTEGER DEFAULT 0,
+    groups_firing INTEGER DEFAULT 0,
+
+    -- Regime
+    regime VARCHAR(30),  -- FEAR, NERVOUS, FLAT, COMPLACENT, GREED
+
+    -- Full signal data (20 signals as JSONB)
+    signals JSONB,
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(ticker, trade_date)
+);
+
+CREATE INDEX idx_zero_dte_signals_date ON zero_dte_signals(trade_date);
+CREATE INDEX idx_zero_dte_signals_composite ON zero_dte_signals(composite);
+CREATE INDEX idx_zero_dte_signals_groups ON zero_dte_signals(groups_firing);
+
+-- ============================================================================
+-- 12. ZERO_DTE_TRADES TABLE (0DTE trade backtest results)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS zero_dte_trades (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Identification
+    signal_date DATE NOT NULL,
+    ticker VARCHAR(10) NOT NULL,
+    structure VARCHAR(50) NOT NULL,
+
+    -- Pricing
+    entry_price DECIMAL(10,4),
+    exit_price DECIMAL(10,4),
+    pnl DECIMAL(10,4),
+
+    -- Spot prices
+    spot_at_entry DECIMAL(10,2),
+    spot_at_exit DECIMAL(10,2),
+    move_pct DECIMAL(8,4),
+
+    -- Signal context
+    composite VARCHAR(50),
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_zero_dte_trades_date ON zero_dte_trades(signal_date);
+CREATE INDEX idx_zero_dte_trades_structure ON zero_dte_trades(structure);
+CREATE INDEX idx_zero_dte_trades_composite ON zero_dte_trades(composite);
+
+-- ============================================================================
+-- 13. CHAIN_SNAPSHOTS TABLE (Option chain data from IB/ORATS)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS chain_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Identification
+    ticker VARCHAR(10) NOT NULL,
+    snapshot_time TIMESTAMPTZ NOT NULL,
+    expir_date DATE NOT NULL,
+    strike DECIMAL(10,2) NOT NULL,
+
+    -- Underlying
+    stock_price DECIMAL(10,2),
+
+    -- Call side
+    call_bid DECIMAL(8,4),
+    call_ask DECIMAL(8,4),
+    call_mid DECIMAL(8,4),
+    call_iv DECIMAL(6,4),
+    call_volume INTEGER,
+    call_oi INTEGER,
+
+    -- Put side
+    put_bid DECIMAL(8,4),
+    put_ask DECIMAL(8,4),
+    put_mid DECIMAL(8,4),
+    put_iv DECIMAL(6,4),
+    put_volume INTEGER,
+    put_oi INTEGER,
+
+    -- Greeks (call-side by convention, put delta = delta - 1)
+    delta DECIMAL(8,4),
+    gamma DECIMAL(8,6),
+    theta DECIMAL(8,4),
+    vega DECIMAL(8,4),
+
+    -- Source
+    source VARCHAR(10) NOT NULL DEFAULT 'ib',  -- 'ib' or 'orats'
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(ticker, snapshot_time, expir_date, strike, source)
+);
+
+CREATE INDEX idx_chain_snapshots_ticker_time ON chain_snapshots(ticker, snapshot_time);
+CREATE INDEX idx_chain_snapshots_expir ON chain_snapshots(expir_date);
+CREATE INDEX idx_chain_snapshots_strike ON chain_snapshots(strike);
+CREATE INDEX idx_chain_snapshots_source ON chain_snapshots(source);
+
+-- ============================================================================
+-- 14. INTRADAY_BARS TABLE (Price bars from IB)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS intraday_bars (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Identification
+    ticker VARCHAR(10) NOT NULL,
+    bar_time TIMESTAMPTZ NOT NULL,
+    bar_size VARCHAR(10) NOT NULL,  -- '1 min', '5 mins', '1 hour', '1 day'
+
+    -- OHLCV
+    open DECIMAL(10,2) NOT NULL,
+    high DECIMAL(10,2) NOT NULL,
+    low DECIMAL(10,2) NOT NULL,
+    close DECIMAL(10,2) NOT NULL,
+    volume BIGINT DEFAULT 0,
+    bar_count INTEGER DEFAULT 0,
+
+    -- Source
+    source VARCHAR(10) NOT NULL DEFAULT 'ib',
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(ticker, bar_time, bar_size, source)
+);
+
+CREATE INDEX idx_intraday_bars_ticker_time ON intraday_bars(ticker, bar_time);
+CREATE INDEX idx_intraday_bars_bar_size ON intraday_bars(bar_size);
+CREATE INDEX idx_intraday_bars_source ON intraday_bars(source);
+
+-- ============================================================================
+-- 15. VOL_SURFACE_SNAPSHOTS TABLE (ORATS intraday vol surface data)
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS vol_surface_snapshots (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Identification
+    ticker VARCHAR(10) NOT NULL,
+    snapshot_time TIMESTAMPTZ NOT NULL,
+    trade_date DATE NOT NULL,
+
+    -- Spot
+    stock_price DECIMAL(10,2),
+
+    -- Vol surface core fields
+    iv10d DECIMAL(6,4),
+    iv20d DECIMAL(6,4),
+    iv30d DECIMAL(6,4),
+    iv60d DECIMAL(6,4),
+    iv90d DECIMAL(6,4),
+
+    -- Skew and term structure
+    skewing DECIMAL(8,4),
+    contango DECIMAL(8,4),
+    skew_25d_rr DECIMAL(8,4),
+
+    -- Realized vol
+    hv10d DECIMAL(6,4),
+    hv20d DECIMAL(6,4),
+    hv30d DECIMAL(6,4),
+    hv60d DECIMAL(6,4),
+
+    -- Forward vol and slopes
+    fbfwd DECIMAL(8,4),
+    rSlp30 DECIMAL(8,4),
+    rDrv30 DECIMAL(8,4),
+
+    -- Wing skew
+    dlt25Iv30d DECIMAL(6,4),
+    dlt75Iv30d DECIMAL(6,4),
+    dlt95Iv30d DECIMAL(6,4),
+    dlt5Iv30d DECIMAL(6,4),
+
+    -- Borrow/funding
+    borrow30 DECIMAL(8,4),
+    borrow2y DECIMAL(8,4),
+    riskFree30 DECIMAL(8,4),
+
+    -- IV rank
+    iv_rank_1m DECIMAL(5,2),
+    iv_pct_1m DECIMAL(5,2),
+
+    -- Full snapshot as JSONB (all fields)
+    raw_data JSONB,
+
+    -- Source
+    source VARCHAR(10) NOT NULL DEFAULT 'orats',
+
+    -- Metadata
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+
+    UNIQUE(ticker, snapshot_time, source)
+);
+
+CREATE INDEX idx_vol_surface_ticker_time ON vol_surface_snapshots(ticker, snapshot_time);
+CREATE INDEX idx_vol_surface_date ON vol_surface_snapshots(trade_date);
+CREATE INDEX idx_vol_surface_source ON vol_surface_snapshots(source);
+
+-- ============================================================================
 -- FUNCTIONS AND TRIGGERS
 -- ============================================================================
 

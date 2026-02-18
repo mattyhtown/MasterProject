@@ -83,9 +83,22 @@ class PortfolioAgent(BaseAgent):
 
         core_count = signals.get("core_count", 0)
         composite = signals.get("composite")
+        groups_firing = signals.get("groups_firing", 0)
+        wing_count = signals.get("wing_count", 0)
+        fund_count = signals.get("fund_count", 0)
+        mom_count = signals.get("mom_count", 0)
+        calendar_modifier = signals.get("calendar_modifier", 1.0)
 
-        # Signal sizing
-        sizing = self.sizer.compute(core_count)
+        # Signal sizing — full context
+        sizing = self.sizer.compute(
+            core_count,
+            calendar_modifier=calendar_modifier,
+            composite=composite,
+            groups_firing=groups_firing,
+            wing_count=wing_count,
+            fund_count=fund_count,
+            mom_count=mom_count,
+        )
         risk_budget = sizing["risk_budget"]
 
         # Apply correlation discount
@@ -102,8 +115,15 @@ class PortfolioAgent(BaseAgent):
                 errors=["Daily deployment cap reached"],
             )
 
-        # Adaptive structure selection
-        ranked = self.selector.select(summary, core_count)
+        # Adaptive structure selection — composite-aware
+        ranked = self.selector.select(
+            summary, core_count,
+            composite=composite,
+            groups_firing=groups_firing,
+            wing_count=wing_count,
+            fund_count=fund_count,
+            mom_count=mom_count,
+        )
         top_structure, reason = ranked[0] if ranked else (None, "")
 
         # Directional tier capacity check
@@ -124,9 +144,12 @@ class PortfolioAgent(BaseAgent):
                 "portfolio_snapshot": self._snapshot(),
             },
             messages=[
-                f"Signal: {composite} ({core_count} core, {signal_system})",
+                f"Signal: {composite} ({core_count} core, "
+                f"{groups_firing} groups, {signal_system})",
                 f"Risk budget: ${risk_budget:,.0f} "
-                f"(x{sizing['multiplier']:.1f})",
+                f"(core={sizing['core_mult']:.1f}x × "
+                f"comp={sizing['composite_mult']:.1f}x × "
+                f"grp={sizing['group_bonus']:.1f}x)",
                 f"Structure: {top_structure.value if top_structure else 'none'} "
                 f"({reason})",
             ],

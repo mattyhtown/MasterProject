@@ -8,6 +8,9 @@ from .call_ratio_spread import CallRatioSpreadAgent
 from .broken_wing_butterfly import BrokenWingButterflyAgent
 from .put_debit_spread import PutDebitSpreadAgent
 from .long_put import LongPutAgent
+from .bear_call_spread import BearCallSpreadAgent
+from .iron_butterfly import IronButterflyAgent
+from .short_iron_condor import ShortIronCondorAgent
 
 __all__ = [
     "StrategyAgentBase",
@@ -18,4 +21,7 @@ __all__ = [
     "BrokenWingButterflyAgent",
     "PutDebitSpreadAgent",
     "LongPutAgent",
+    "BearCallSpreadAgent",
+    "IronButterflyAgent",
+    "ShortIronCondorAgent",
 ]

@@ -14,7 +14,8 @@ from apex_sharpe.types import SignalStrength
 def test_default_sizing():
     s = SignalSizer()
     r = s.compute(3)
-    assert r["risk_budget"] == 5000.0
+    # 250K * 8% * 1.0 = 20K
+    assert r["risk_budget"] == 20000.0
     assert r["multiplier"] == 1.0
     assert r["strength"] == SignalStrength.STRONG
 
@@ -22,7 +23,8 @@ def test_default_sizing():
 def test_4_signal_sizing():
     s = SignalSizer()
     r = s.compute(4)
-    assert r["risk_budget"] == 7500.0
+    # 250K * 8% * 1.5 = 30K
+    assert r["risk_budget"] == 30000.0
     assert r["multiplier"] == 1.5
     assert r["strength"] == SignalStrength.VERY_STRONG
 
@@ -30,7 +32,8 @@ def test_4_signal_sizing():
 def test_5_signal_sizing():
     s = SignalSizer()
     r = s.compute(5)
-    assert r["risk_budget"] == 10000.0
+    # 250K * 8% * 2.0 = 40K
+    assert r["risk_budget"] == 40000.0
     assert r["multiplier"] == 2.0
     assert r["strength"] == SignalStrength.EXTREME
 
@@ -51,7 +54,8 @@ def test_max_risk_cap():
 def test_capital_override():
     s = SignalSizer()
     r = s.compute(3, capital_override=100000.0)
-    assert r["risk_budget"] == 2000.0  # 100K * 2% * 1.0
+    # 100K * 8% * 1.0 = 8K
+    assert r["risk_budget"] == 8000.0
     assert r["capital"] == 100000.0
 
 
@@ -64,4 +68,5 @@ def test_unknown_core_count():
 
 def test_max_daily_budget():
     s = SignalSizer()
-    assert s.max_daily_budget() == 25000.0  # 250K * 10%
+    # 250K * 40% = 100K
+    assert s.max_daily_budget() == 100000.0

@@ -27,6 +27,9 @@ from .strategy import (
 )
 from .ops import PerformanceAgent, LatencyAgent, SecurityAgent, InfraAgent
 from .backtest import ExtendedBacktest, RegimeClassifier
+from .optimizer import OptimizerAgent
+from .regime_classifier import VolSurfaceRegimeClassifier
+from .signal_discovery import SignalDiscoveryAgent
 from .research import (
     DataCatalogAgent, ResearchAgent, LibrarianAgent,
     PatternAgent, MacroAgent, StrategyDevAgent,
@@ -66,6 +69,9 @@ __all__ = [
     # Backtest agents
     "ExtendedBacktest",
     "RegimeClassifier",
+    "OptimizerAgent",
+    "VolSurfaceRegimeClassifier",
+    "SignalDiscoveryAgent",
     # IB agents
     "IBExecutorAgent",
     "IBSyncAgent",

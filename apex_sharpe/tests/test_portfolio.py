@@ -86,7 +86,7 @@ def test_greeks_limits():
 
 def test_daily_cap():
     p = PortfolioAgent()
-    p._daily_deployed = 25000.0  # At daily cap
+    p._daily_deployed = 100000.0  # At daily cap (40% of $250K)
     result = p.run({
         "signals": {"composite": "FEAR_BOUNCE_STRONG", "core_count": 3},
         "summary": {},

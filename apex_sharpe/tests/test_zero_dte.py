@@ -80,16 +80,23 @@ class TestDetermineDirection:
     def _make_agent_with_signals(self, action_keys):
         """Create agent and mock signals with given keys set to ACTION."""
         agent = ZeroDTEAgent()
-        # Build signals dict where specified keys are ACTION, rest are INFO
+        # Build signals dict with all 20 signal keys
         all_keys = [
             "skewing", "contango", "rip", "skew_25d_rr", "credit_spread",
+            "wing_skew_30d", "wing_skew_10d",
+            "borrow_term", "borrow_spread",
+            "iv_momentum", "skewing_change", "contango_change",
+            "model_confidence", "mw_adj_30", "iv10_iv30_ratio",
             "iv_rv_spread", "fbfwd30_20", "rSlp30", "fwd_kink", "rDrv30",
         ]
         signals = {}
         for k in all_keys:
             signals[k] = {
                 "level": "ACTION" if k in action_keys else "OK",
-                "tier": 1,
+                "tier": 1 if k not in ("model_confidence", "mw_adj_30",
+                                        "iv10_iv30_ratio", "iv_rv_spread",
+                                        "fbfwd30_20", "rSlp30", "fwd_kink",
+                                        "rDrv30") else 2,
                 "value": 0.1 if k in action_keys else 0.0,
             }
         return agent, signals
@@ -119,12 +126,59 @@ class TestDetermineDirection:
         direction, t1 = agent.determine_direction(signals)
         assert direction is None
 
-    def test_intraday_bearish(self):
+    def test_intraday_bearish_weak(self):
+        """3 core signals alone = WEAK (need 2+ groups for strong)."""
         agent, signals = self._make_agent_with_signals(
             ["skewing", "contango", "rip"]
         )
         direction, t1 = agent.determine_direction(signals, intraday=True)
+        assert direction == "DIRECTIONAL_BEARISH_WEAK"
+
+    def test_intraday_bearish_strong(self):
+        """Core + wing + momentum = 3 groups = STRONG bearish."""
+        agent, signals = self._make_agent_with_signals(
+            ["skewing", "contango", "rip", "wing_skew_30d", "iv_momentum", "skewing_change"]
+        )
+        direction, t1 = agent.determine_direction(signals, intraday=True)
         assert direction == "DIRECTIONAL_BEARISH"
+
+    def test_multi_signal_strong(self):
+        """3+ signal groups firing = MULTI_SIGNAL_STRONG."""
+        agent, signals = self._make_agent_with_signals(
+            ["skewing", "contango", "rip",           # core
+             "wing_skew_30d",                        # wing
+             "borrow_term",                          # funding
+             "iv_momentum", "skewing_change"]        # momentum
+        )
+        direction, t1 = agent.determine_direction(signals)
+        assert direction == "MULTI_SIGNAL_STRONG"
+
+    def test_funding_stress_composite(self):
+        """Both borrow signals + 1 other group = FUNDING_STRESS."""
+        agent, signals = self._make_agent_with_signals(
+            ["skewing", "contango",  # core (2 = group fires)
+             "borrow_term", "borrow_spread"]  # funding
+        )
+        direction, t1 = agent.determine_direction(signals)
+        assert direction == "FUNDING_STRESS"
+
+    def test_wing_panic_composite(self):
+        """Both wing signals + 1 other group = WING_PANIC."""
+        agent, signals = self._make_agent_with_signals(
+            ["skewing", "contango",  # core (2 = group fires)
+             "wing_skew_30d", "wing_skew_10d"]  # wing
+        )
+        direction, t1 = agent.determine_direction(signals)
+        assert direction == "WING_PANIC"
+
+    def test_vol_acceleration_composite(self):
+        """2+ momentum signals + 1 other group = VOL_ACCELERATION."""
+        agent, signals = self._make_agent_with_signals(
+            ["skewing", "contango",  # core (2 = group fires)
+             "iv_momentum", "skewing_change"]  # momentum
+        )
+        direction, t1 = agent.determine_direction(signals)
+        assert direction == "VOL_ACCELERATION"
 
 
 class TestZeroDTEAgent:

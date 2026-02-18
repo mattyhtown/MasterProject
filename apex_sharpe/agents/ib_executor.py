@@ -1,13 +1,18 @@
 """
 IBExecutorAgent — execute real trades via Interactive Brokers.
 
-Supports all 6 trade structures:
+Supports all 10 trade structures:
   1. Iron Condor (IC)         — 4 legs, SELL combo (credit)
   2. Call Debit Spread (CDS)  — 2 legs, BUY combo (debit)
   3. Bull Put Spread (BPS)    — 2 legs, SELL combo (credit)
   4. Long Call (LC)           — 1 leg, BUY single
   5. Call Ratio Spread (CRS)  — 3 legs, mixed ratios (1:2)
   6. Broken Wing Butterfly    — 4 legs, mixed ratios (1:2:1)
+  7. Put Debit Spread (PDS)   — 2 legs, BUY combo (debit)
+  8. Long Put (LP)            — 1 leg, BUY single
+  9. Bear Call Spread (BCS)   — 2 legs, SELL combo (credit)
+  10. Iron Butterfly (IFLY)   — 4 legs, SELL combo (credit)
+  11. Short Iron Condor (SIC) — 4 legs, SELL combo (credit)
 
 Safety features:
   - whatIfOrder() margin preview before every trade
@@ -35,6 +40,9 @@ CALL_RATIO_SPREAD = "Call Ratio Spread"
 BROKEN_WING_BUTTERFLY = "Broken Wing Butterfly"
 PUT_DEBIT_SPREAD = "Put Debit Spread"
 LONG_PUT = "Long Put"
+BEAR_CALL_SPREAD = "Bear Call Spread"
+IRON_BUTTERFLY = "Iron Butterfly"
+SHORT_IRON_CONDOR = "Short Iron Condor"
 
 # Map structure → short label for position IDs
 _STRUCTURE_PREFIX = {
@@ -46,13 +54,16 @@ _STRUCTURE_PREFIX = {
     BROKEN_WING_BUTTERFLY: "BWB",
     PUT_DEBIT_SPREAD: "PDS",
     LONG_PUT: "LP",
+    BEAR_CALL_SPREAD: "BCS",
+    IRON_BUTTERFLY: "IFLY",
+    SHORT_IRON_CONDOR: "SIC",
 }
 
 
 class IBExecutorAgent(BaseAgent):
     """Execute trades via Interactive Brokers.
 
-    Supports all 6 trade structures. Multi-leg orders use BAG (combo)
+    Supports all 10 trade structures. Multi-leg orders use BAG (combo)
     contracts. All trades go through margin preview (whatIfOrder)
     before execution.
     """
@@ -234,6 +245,66 @@ class IBExecutorAgent(BaseAgent):
              "action": "BUY", "ratio": 1},
         ]
         return ib_legs, "BUY", round(fill["entry_cost"], 2)
+
+    @staticmethod
+    def _build_bcs_legs(symbol: str, expiry: str,
+                        strikes: Dict, fill: Dict) -> Tuple[List[Dict], str, float]:
+        """Bear Call Spread: SELL 1x short call (lower), BUY 1x long call (higher).
+        Returns (ib_legs, combo_action, limit_price).
+        """
+        ib_legs = [
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["short_strike"], "right": "C",
+             "action": "SELL", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["long_strike"], "right": "C",
+             "action": "BUY", "ratio": 1},
+        ]
+        return ib_legs, "SELL", round(fill["entry_credit"], 2)
+
+    @staticmethod
+    def _build_ifly_legs(symbol: str, expiry: str,
+                         strikes: Dict, fill: Dict) -> Tuple[List[Dict], str, float]:
+        """Iron Butterfly: SELL ATM call+put, BUY OTM call wing + OTM put wing.
+        Returns (ib_legs, combo_action, limit_price).
+        """
+        ib_legs = [
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["atm_strike"], "right": "C",
+             "action": "SELL", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["atm_strike"], "right": "P",
+             "action": "SELL", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["wing_call_strike"], "right": "C",
+             "action": "BUY", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["wing_put_strike"], "right": "P",
+             "action": "BUY", "ratio": 1},
+        ]
+        return ib_legs, "SELL", round(fill["entry_credit"], 2)
+
+    @staticmethod
+    def _build_sic_legs(symbol: str, expiry: str,
+                        strikes: Dict, fill: Dict) -> Tuple[List[Dict], str, float]:
+        """Short Iron Condor: SELL OTM call+put, BUY further OTM wings.
+        Returns (ib_legs, combo_action, limit_price).
+        """
+        ib_legs = [
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["short_call_strike"], "right": "C",
+             "action": "SELL", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["short_put_strike"], "right": "P",
+             "action": "SELL", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["long_call_strike"], "right": "C",
+             "action": "BUY", "ratio": 1},
+            {"symbol": symbol, "expiry": expiry,
+             "strike": strikes["long_put_strike"], "right": "P",
+             "action": "BUY", "ratio": 1},
+        ]
+        return ib_legs, "SELL", round(fill["entry_credit"], 2)
 
     # ------------------------------------------------------------------
     # Position limit check
@@ -479,6 +550,15 @@ class IBExecutorAgent(BaseAgent):
                 symbol, expiry, strikes, fill)
         elif structure == LONG_PUT:
             ib_legs, combo_action, limit_price = self._build_lp_legs(
+                symbol, expiry, strikes, fill)
+        elif structure == BEAR_CALL_SPREAD:
+            ib_legs, combo_action, limit_price = self._build_bcs_legs(
+                symbol, expiry, strikes, fill)
+        elif structure == IRON_BUTTERFLY:
+            ib_legs, combo_action, limit_price = self._build_ifly_legs(
+                symbol, expiry, strikes, fill)
+        elif structure == SHORT_IRON_CONDOR:
+            ib_legs, combo_action, limit_price = self._build_sic_legs(
                 symbol, expiry, strikes, fill)
         else:
             return self._result(

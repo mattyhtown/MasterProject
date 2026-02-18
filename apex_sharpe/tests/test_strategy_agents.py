@@ -18,6 +18,9 @@ from apex_sharpe.agents.strategy import (
     BrokenWingButterflyAgent,
     PutDebitSpreadAgent,
     LongPutAgent,
+    BearCallSpreadAgent,
+    IronButterflyAgent,
+    ShortIronCondorAgent,
 )
 from apex_sharpe.types import TradeStructure
 
@@ -202,6 +205,112 @@ class TestLongPut:
         assert agent.NUM_LEGS == 1
 
 
+class TestBearCallSpread:
+    def test_find_strikes(self):
+        agent = BearCallSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            # Short call lower strike, long call higher strike
+            assert strikes["short_strike"] < strikes["long_strike"]
+            assert strikes["width"] > 0
+
+    def test_simulate_entry(self):
+        agent = BearCallSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                assert fill["qty"] >= 1
+                assert fill["max_risk"] > 0
+                assert fill["entry_credit"] > 0
+
+    def test_compute_pnl_winner(self):
+        agent = BearCallSpreadAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                # Price drops: winner for bear call spread
+                pnl_down = agent.compute_pnl(strikes, fill, 80.0)
+                pnl_up = agent.compute_pnl(strikes, fill, 120.0)
+                assert pnl_down > pnl_up
+
+    def test_structure_enum(self):
+        agent = BearCallSpreadAgent()
+        assert agent.STRUCTURE == TradeStructure.BEAR_CALL_SPREAD
+        assert agent.NUM_LEGS == 2
+
+
+class TestIronButterfly:
+    def test_find_strikes(self):
+        agent = IronButterflyAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            assert strikes["wing_put_strike"] < strikes["atm_strike"]
+            assert strikes["atm_strike"] < strikes["wing_call_strike"]
+
+    def test_simulate_entry(self):
+        agent = IronButterflyAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                assert fill["qty"] >= 1
+                assert fill["entry_credit"] > 0
+
+    def test_compute_pnl_at_pin(self):
+        agent = IronButterflyAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                # Pin at ATM = max profit
+                pnl_pin = agent.compute_pnl(strikes, fill, strikes["atm_strike"])
+                pnl_move = agent.compute_pnl(strikes, fill, 80.0)
+                assert pnl_pin > pnl_move
+
+    def test_structure_enum(self):
+        agent = IronButterflyAgent()
+        assert agent.STRUCTURE == TradeStructure.IRON_BUTTERFLY
+        assert agent.NUM_LEGS == 4
+
+
+class TestShortIronCondor:
+    def test_find_strikes(self):
+        agent = ShortIronCondorAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            assert strikes["long_put_strike"] < strikes["short_put_strike"]
+            assert strikes["short_put_strike"] < strikes["short_call_strike"]
+            assert strikes["short_call_strike"] < strikes["long_call_strike"]
+
+    def test_simulate_entry(self):
+        agent = ShortIronCondorAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                assert fill["qty"] >= 1
+                assert fill["entry_credit"] > 0
+
+    def test_compute_pnl_range_bound(self):
+        agent = ShortIronCondorAgent()
+        strikes = agent.find_strikes(_chain(), 100.0)
+        if strikes:
+            fill = agent.simulate_entry(strikes, 5000.0)
+            if fill:
+                # Stay in range = profit, big move = loss
+                mid = (strikes["short_put_strike"] + strikes["short_call_strike"]) / 2
+                pnl_mid = agent.compute_pnl(strikes, fill, mid)
+                pnl_crash = agent.compute_pnl(strikes, fill, 70.0)
+                assert pnl_mid > pnl_crash
+
+    def test_structure_enum(self):
+        agent = ShortIronCondorAgent()
+        assert agent.STRUCTURE == TradeStructure.SHORT_IRON_CONDOR
+        assert agent.NUM_LEGS == 4
+
+
 class TestAllAgentsInterface:
     """Verify all strategy agents implement the full interface."""
 
@@ -213,6 +322,9 @@ class TestAllAgentsInterface:
         BrokenWingButterflyAgent,
         PutDebitSpreadAgent,
         LongPutAgent,
+        BearCallSpreadAgent,
+        IronButterflyAgent,
+        ShortIronCondorAgent,
     ])
     def test_has_required_methods(self, cls):
         agent = cls()

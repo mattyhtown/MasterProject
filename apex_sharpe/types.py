@@ -52,6 +52,10 @@ class TradeStructure(Enum):
     # Bearish
     PUT_DEBIT_SPREAD = "Put Debit Spread"
     LONG_PUT = "Long Put"
+    # Neutral / Vol
+    BEAR_CALL_SPREAD = "Bear Call Spread"
+    IRON_BUTTERFLY = "Iron Butterfly"
+    SHORT_IRON_CONDOR = "Short Iron Condor"
 
 
 class SignalStrength(Enum):

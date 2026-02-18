@@ -62,6 +62,16 @@ class IBCfg:
 
 
 @dataclass(frozen=True)
+class ChainIngestCfg:
+    tickers: tuple = ("SPY", "SPX")
+    poll_interval: int = 300       # seconds between snapshots
+    strike_range: float = 50.0     # ± from spot
+    source: str = "orats"          # 'orats' or 'ib'
+    max_expiries: int = 3          # nearest N expiries to capture
+    dte_max: int = 45              # skip expiries beyond this
+
+
+@dataclass(frozen=True)
 class ScannerCfg:
     watchlist: tuple = ("SPY",)
     iv_rank_min: float = 30.0
@@ -110,9 +120,27 @@ class ZeroDTECfg:
     skewing_thresh: float = 0.05
     rip_thresh: float = 70.0
     credit_thresh: float = -0.005
-    # Composite
+    # Composite — core fear signals
     core_signals: tuple = ("skewing", "rip", "skew_25d_rr", "contango", "credit_spread")
     composite_min: int = 3
+    # Extended signal groups (discovered via SignalDiscoveryAgent)
+    wing_signals: tuple = ("wing_skew_30d", "wing_skew_10d")
+    funding_signals: tuple = ("borrow_term", "borrow_spread")
+    momentum_signals: tuple = ("iv_momentum", "skewing_change", "contango_change")
+    # Tier 1+ thresholds — wing skew (P90 from data distribution)
+    wing_skew_30d_thresh: float = 0.19        # dlt95-dlt5 30d spread (P90)
+    wing_skew_10d_thresh: float = 0.16        # dlt95-dlt5 10d spread (P90)
+    # Tier 1+ thresholds — funding stress
+    borrow_term_thresh: float = 0.0075        # borrow30 - borrow2y spread (P75)
+    borrow_spread_thresh: float = 0.042       # borrow30 - riskFree30 (P85)
+    # Tier 1+ thresholds — vol momentum
+    iv_momentum_thresh: float = 0.005         # 1-day iv30d increase
+    skewing_change_thresh: float = 0.02       # 1-day skewing jump
+    contango_change_thresh: float = -0.03     # 1-day contango drop
+    # Tier 2+ thresholds — model/liquidity
+    model_confidence_thresh: float = 0.97     # below this = dislocation
+    mw_adj_thresh: float = 0.001              # above this = wide spreads
+    iv10_iv30_thresh: float = 1.05            # above this = short-term fear
     # Tier 2 thresholds
     fbfwd_high: float = 1.05
     fbfwd_low: float = 0.95
@@ -138,20 +166,41 @@ class TradeBacktestCfg:
     put_ds_long: float = 0.40       # Buy ~40d put (closer to ATM)
     put_ds_short: float = 0.25      # Sell ~25d put (more OTM)
     long_put_delta: float = 0.50    # Buy ~50d put (ATM)
+    # Bear call spread (bearish credit)
+    bear_cs_short: float = 0.30     # Sell ~30d call (closer to ATM)
+    bear_cs_long: float = 0.15      # Buy ~15d call (more OTM)
+    # Iron butterfly (ATM sell + wings)
+    ifly_atm_delta: float = 0.50    # ATM strike
+    ifly_wing_delta: float = 0.15   # OTM wings
+    # Short iron condor (OTM sell + wings)
+    ic_short_delta: float = 0.25    # Sell ~25d
+    ic_long_delta: float = 0.10     # Buy ~10d wings
 
 
 @dataclass(frozen=True)
 class SignalSizingCfg:
     """Signal-weighted position sizing."""
     account_capital: float = 250000.0
-    base_risk_pct: float = 0.02             # 2% per trade = $5K base
+    base_risk_pct: float = 0.08             # 8% per trade = $20K base
     multipliers: tuple = (                   # (core_count, multiplier)
-        (3, 1.0),                            # 3 signals: $5K
-        (4, 1.5),                            # 4 signals: $7.5K
-        (5, 2.0),                            # 5 signals: $10K
+        (3, 1.0),                            # 3 signals: $20K
+        (4, 1.5),                            # 4 signals: $30K
+        (5, 2.0),                            # 5 signals: $40K
     )
-    max_risk_pct: float = 0.05              # Hard cap: 5% per trade
-    max_daily_risk_pct: float = 0.10        # Max 10% daily deployment
+    # Composite-aware multipliers — applied ON TOP of core multiplier
+    composite_multipliers: tuple = (
+        ("MULTI_SIGNAL_STRONG", 1.5),       # 3+ groups = highest conviction
+        ("FEAR_BOUNCE_STRONG", 1.0),        # baseline (already strong)
+        ("FEAR_BOUNCE_STRONG_OPEX", 1.3),   # OpEx amplifier
+        ("FUNDING_STRESS", 1.2),            # independent signal = extra edge
+        ("WING_PANIC", 1.1),               # crash skew = moderate bump
+        ("VOL_ACCELERATION", 0.9),          # momentum = slightly lower conviction
+        ("FEAR_BOUNCE_LONG", 0.7),          # only 2 core = smaller size
+    )
+    # Group bonus: each additional group beyond core adds to sizing
+    group_bonus_pct: float = 0.15           # +15% per extra group firing
+    max_risk_pct: float = 0.20              # Hard cap: 20% per trade = $50K
+    max_daily_risk_pct: float = 0.40        # Max 40% daily deployment = $100K
 
 
 @dataclass(frozen=True)
@@ -335,6 +384,7 @@ class AppConfig:
     research: ResearchCfg = field(default_factory=ResearchCfg)
     # IB
     ib: IBCfg = field(default_factory=IBCfg)
+    chain_ingest: ChainIngestCfg = field(default_factory=ChainIngestCfg)
 
 
 def load_config() -> AppConfig:
@@ -380,5 +430,10 @@ def load_config() -> AppConfig:
             client_id=int(_env("IB_CLIENT_ID", "1")),
             account_id=_env("IB_ACCOUNT"),
             paper=_env("IB_PAPER", "true").lower() == "true",
+        ),
+        chain_ingest=ChainIngestCfg(
+            tickers=tuple(_env("CHAIN_TICKERS", "SPY,SPX").split(",")),
+            poll_interval=int(_env("CHAIN_POLL_INTERVAL", "300")),
+            source=_env("CHAIN_SOURCE", "orats"),
         ),
     )

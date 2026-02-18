@@ -143,7 +143,7 @@ class TestAdaptiveSelectorRealData:
         assert summary is not None, "No SPX summary fixture"
         a = AdaptiveSelector()
         result = a.select(summary, core_count=3)
-        assert len(result) == 7
+        assert len(result) == 10
         structures = [r[0] for r in result]
         assert set(structures) == set(TradeStructure)
         # Top pick should have a reason
@@ -159,7 +159,7 @@ class TestAdaptiveSelectorRealData:
         a = AdaptiveSelector()
         iv_rank_val = ivrank.get("ivRank1m", 50)
         result = a.select(summary, core_count=4, iv_rank=iv_rank_val)
-        assert len(result) == 7
+        assert len(result) == 10
 
 
 # ---------------------------------------------------------------------------

@@ -184,6 +184,151 @@ class SupabaseSync:
         except Exception as exc:
             print(f"[Supabase] log_iv_rank failed: {exc}")
 
+    # -- Chain / Bar / Vol Surface storage ------------------------------------
+
+    def log_chain_snapshot(self, ticker: str, snapshot_time: str,
+                           chain_rows: list, source: str = "ib") -> int:
+        """Bulk-insert option chain rows into chain_snapshots.
+
+        Args:
+            ticker: Underlying symbol
+            snapshot_time: ISO timestamp of the snapshot
+            chain_rows: List of ORATS-compatible dicts with strike, expirDate, etc.
+            source: 'ib' or 'orats'
+
+        Returns number of rows inserted.
+        """
+        if not self.enabled or not chain_rows:
+            return 0
+        try:
+            rows = []
+            for r in chain_rows:
+                rows.append({
+                    "ticker": ticker,
+                    "snapshot_time": snapshot_time,
+                    "expir_date": r.get("expirDate"),
+                    "strike": r.get("strike"),
+                    "stock_price": r.get("stockPrice"),
+                    "call_bid": r.get("callBidPrice"),
+                    "call_ask": r.get("callAskPrice"),
+                    "call_mid": round((r.get("callBidPrice", 0) + r.get("callAskPrice", 0)) / 2, 4)
+                    if r.get("callBidPrice") is not None else None,
+                    "call_iv": r.get("callSmvVol"),
+                    "put_bid": r.get("putBidPrice"),
+                    "put_ask": r.get("putAskPrice"),
+                    "put_mid": round((r.get("putBidPrice", 0) + r.get("putAskPrice", 0)) / 2, 4)
+                    if r.get("putBidPrice") is not None else None,
+                    "put_iv": r.get("putSmvVol"),
+                    "delta": r.get("delta"),
+                    "gamma": r.get("gamma"),
+                    "theta": r.get("theta"),
+                    "vega": r.get("vega"),
+                    "source": source,
+                })
+            resp = self.client.table("chain_snapshots").upsert(
+                rows, on_conflict="ticker,snapshot_time,expir_date,strike,source"
+            ).execute()
+            n = len(resp.data) if resp.data else 0
+            print(f"[Supabase] Chain snapshot: {n} strikes for {ticker}")
+            return n
+        except Exception as exc:
+            print(f"[Supabase] log_chain_snapshot failed: {exc}")
+            return 0
+
+    def log_intraday_bars(self, ticker: str, bars: list,
+                          bar_size: str = "1 min",
+                          source: str = "ib") -> int:
+        """Bulk-insert intraday bars.
+
+        Args:
+            ticker: Symbol
+            bars: List of {time/date, open, high, low, close, volume, bar_count}
+            bar_size: e.g. '1 min', '5 mins', '1 hour'
+            source: 'ib'
+
+        Returns number of rows inserted.
+        """
+        if not self.enabled or not bars:
+            return 0
+        try:
+            rows = []
+            for b in bars:
+                rows.append({
+                    "ticker": ticker,
+                    "bar_time": b.get("time") or b.get("date"),
+                    "bar_size": bar_size,
+                    "open": b["open"],
+                    "high": b["high"],
+                    "low": b["low"],
+                    "close": b["close"],
+                    "volume": b.get("volume", 0),
+                    "bar_count": b.get("bar_count", 0),
+                    "source": source,
+                })
+            resp = self.client.table("intraday_bars").upsert(
+                rows, on_conflict="ticker,bar_time,bar_size,source"
+            ).execute()
+            n = len(resp.data) if resp.data else 0
+            print(f"[Supabase] Bars: {n} {bar_size} bars for {ticker}")
+            return n
+        except Exception as exc:
+            print(f"[Supabase] log_intraday_bars failed: {exc}")
+            return 0
+
+    def log_vol_surface_snapshot(self, ticker: str, summary: dict,
+                                  source: str = "orats") -> bool:
+        """Insert a vol surface snapshot from ORATS intraday summary.
+
+        Args:
+            ticker: Symbol
+            summary: ORATS summary dict with skewing, contango, iv30d, etc.
+            source: 'orats'
+
+        Returns True on success.
+        """
+        if not self.enabled or not summary:
+            return False
+        try:
+            snap_time = summary.get("_snapshot_time") or datetime.now().isoformat()
+            row = {
+                "ticker": ticker,
+                "snapshot_time": snap_time,
+                "trade_date": date.today().isoformat(),
+                "stock_price": summary.get("stockPrice"),
+                "iv10d": summary.get("iv10d"),
+                "iv20d": summary.get("iv20d"),
+                "iv30d": summary.get("iv30d"),
+                "iv60d": summary.get("iv60d"),
+                "iv90d": summary.get("iv90d"),
+                "skewing": summary.get("skewing"),
+                "contango": summary.get("contango"),
+                "hv10d": summary.get("orHv10d"),
+                "hv20d": summary.get("orHv20d"),
+                "hv30d": summary.get("orHv30d"),
+                "hv60d": summary.get("orHv60d"),
+                "fbfwd": summary.get("fbfwd"),
+                "rSlp30": summary.get("rSlp30"),
+                "rDrv30": summary.get("rDrv30"),
+                "dlt25Iv30d": summary.get("dlt25Iv30d"),
+                "dlt75Iv30d": summary.get("dlt75Iv30d"),
+                "dlt95Iv30d": summary.get("dlt95Iv30d"),
+                "dlt5Iv30d": summary.get("dlt5Iv30d"),
+                "borrow30": summary.get("borrow30"),
+                "borrow2y": summary.get("borrow2y"),
+                "riskFree30": summary.get("riskFree30"),
+                "iv_rank_1m": summary.get("ivRank1m"),
+                "iv_pct_1m": summary.get("ivPct1m"),
+                "raw_data": summary,
+                "source": source,
+            }
+            self.client.table("vol_surface_snapshots").upsert(
+                row, on_conflict="ticker,snapshot_time,source"
+            ).execute()
+            return True
+        except Exception as exc:
+            print(f"[Supabase] log_vol_surface_snapshot failed: {exc}")
+            return False
+
     def log_alert(self, position: Dict, alert: Dict) -> None:
         """Record an alert."""
         if not self.enabled:

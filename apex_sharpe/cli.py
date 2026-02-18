@@ -7,10 +7,11 @@ Usage:
     python -m apex_sharpe full            — Both scan + monitor
     python -m apex_sharpe 0dte            — Live 0DTE directional signal monitor
     python -m apex_sharpe 0dte-demo       — Offline demo using recent data
-    python -m apex_sharpe 0dte-backtest   — Backtest signals against 6 months
+    python -m apex_sharpe 0dte-backtest   — Backtest signals against 12 months
     python -m apex_sharpe 0dte-cron       — Auto-start/stop 0DTE for cron (market hours)
     python -m apex_sharpe 0dte-trades     — Backtest trade structures on signals
     python -m apex_sharpe directional     — Live 0DTE with portfolio orchestration
+    python -m apex_sharpe backtest-portfolio — Portfolio equity curve backtest (CAGR, Sharpe)
     python -m apex_sharpe backtest-all    — Compare all 5 structures + adaptive
     python -m apex_sharpe leaps           — LEAPS / PMCC management
     python -m apex_sharpe portfolio       — Full portfolio status
@@ -37,9 +38,19 @@ Usage:
     python -m apex_sharpe ib-sync         — Reconcile positions.json with IB
     python -m apex_sharpe ib-history      — Download historical bars from IB
     python -m apex_sharpe ib-chain        — Fetch live option chain from IB
+    python -m apex_sharpe ib-collect      — Intraday data collector (1min bars + ORATS)
+    python -m apex_sharpe optimize         — Optimize structure parameters (grid search)
+    python -m apex_sharpe theta            — Theta maximizer for credit strategies
+    python -m apex_sharpe event-study     — Event study backtest (COVID, 2022 bear, etc.)
+    python -m apex_sharpe regime-backtest — Multi-regime backtest (all 5 regimes)
+    python -m apex_sharpe regime-classify — Live vol surface regime classification
+    python -m apex_sharpe signal-discover — Mine untapped ORATS fields + cross-asset for new signals
+    python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
+    python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
 """
 
 import sys
+from datetime import date
 
 from .config import load_config
 from .data.orats_client import ORATSClient
@@ -62,7 +73,13 @@ IC Pipeline:
 
 Portfolio Management:
   directional     Live 0DTE with portfolio agent orchestration
+  backtest-portfolio Portfolio equity curve (20 signals, CAGR, Sharpe, drawdown)
   backtest-all    Compare all 5+ structures with signal-weighted sizing
+  optimize        Optimize delta parameters per structure (grid search)
+  theta           Theta maximizer — best strikes for credit strategies
+  event-study     Event study backtest (covid, 2022_bear, liberation_day, etc.)
+  regime-backtest Extended multi-regime backtest (all 5 vol surface regimes)
+  regime-classify Live vol surface regime classification
   leaps           LEAPS / Poor Man's Covered Call management
   portfolio       Full portfolio status across all tiers
   tax             Tax summary, loss harvesting, wash sale check
@@ -88,12 +105,16 @@ Research & Backtesting:
   novelty         Novelty / anomaly / lead-lag discovery
   scout           External dataset scouting and recommendations
   hierarchy       Agent hierarchy and division structure
+  signal-discover Mine untapped ORATS + cross-asset data for new signals
+  signal-analysis 20 signals × 5 regimes backtest analysis
 
 Interactive Brokers:
   ib-status       IB account status, positions, P&L
   ib-sync         Reconcile positions.json with IB account
   ib-history      Download historical bars from IB
   ib-chain        Fetch live option chain from IB
+  ib-collect      Intraday price + vol surface data (live/backfill/status)
+  chain-ingest    Intraday chain snapshots → Supabase (poll/latest/history)
 """
 
 
@@ -162,6 +183,23 @@ def main() -> None:
         db = DatabaseAgent(config.supabase)
         DirectionalPipeline(config, orats, state).run_live(db=db)
 
+    elif mode in ("backtest-portfolio", "backtest_portfolio"):
+        from .agents.trade_backtest import TradeStructureBacktest
+        bt = TradeStructureBacktest(
+            config.trade_backtest,
+            config.zero_dte,
+            config.signal_sizing,
+            config.adaptive_selector,
+            config.call_ratio_spread,
+            config.broken_wing_butterfly,
+        )
+        # Parse periods from args: backtest-portfolio 60 36 12 6
+        if len(sys.argv) > 2:
+            periods = [int(x) for x in sys.argv[2:]]
+        else:
+            periods = [60, 36, 12, 6]
+        bt.run_portfolio_backtest(orats, state, periods=periods)
+
     elif mode in ("backtest-all", "backtest_all"):
         from .agents.trade_backtest import TradeStructureBacktest
         bt = TradeStructureBacktest(
@@ -172,8 +210,141 @@ def main() -> None:
             config.call_ratio_spread,
             config.broken_wing_butterfly,
         )
-        months = int(sys.argv[2]) if len(sys.argv) > 2 else 6
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
         bt.run_backtest(orats, state, months=months)
+
+    elif mode == "optimize":
+        from .agents.optimizer import OptimizerAgent
+        agent = OptimizerAgent(
+            backtest_config=config.trade_backtest,
+            zero_dte_config=config.zero_dte,
+            sizing_config=config.signal_sizing,
+            crs_config=config.call_ratio_spread,
+            bwb_config=config.broken_wing_butterfly,
+        )
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+        structure = sys.argv[3] if len(sys.argv) > 3 else None
+        agent.run_optimize(orats, state, months=months,
+                           structure_filter=structure)
+
+    elif mode == "theta":
+        from .selection.theta_maximizer import ThetaMaximizer
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPX"
+        structure = sys.argv[3] if len(sys.argv) > 3 else None
+        # Try live ORATS chain first
+        resp = orats.chain(ticker, "")
+        if resp and resp.get("data"):
+            chain = resp["data"]
+            spot_row = chain[0] if chain else {}
+            spot = spot_row.get("stockPrice", spot_row.get("spotPrice", 0))
+            # Find nearest expiry
+            exps = sorted(set(s.get("expirDate", "") for s in chain))
+            exp = exps[0] if exps else None
+            exp_chain = [s for s in chain if s.get("expirDate") == exp] if exp else chain
+            print(f"\n  {ticker} | spot=${spot:.2f} | expiry={exp} | {len(exp_chain)} strikes")
+            tm = ThetaMaximizer()
+            results = tm.scan(exp_chain, spot, structure=structure, expiry=exp)
+            tm.print_results(results)
+            tm.print_summary(results)
+        else:
+            # Fallback to cached data
+            cache = state.load_cache()
+            from datetime import date, timedelta
+            for days_back in range(0, 5):
+                d = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+                ck = f"hist_strikes_{ticker}_{d}"
+                if ck in cache:
+                    chain = cache[ck]
+                    spot = chain[0].get("spotPrice", chain[0].get("stockPrice", 0))
+                    exps = sorted(set(s["expirDate"] for s in chain))
+                    exp = exps[0] if exps else None
+                    exp_chain = [s for s in chain if s.get("expirDate") == exp] if exp else chain
+                    print(f"\n  {ticker} | spot=${spot:.2f} | expiry={exp} (cached {d}) | {len(exp_chain)} strikes")
+                    tm = ThetaMaximizer()
+                    results = tm.scan(exp_chain, spot, structure=structure, expiry=exp)
+                    tm.print_results(results)
+                    tm.print_summary(results)
+                    break
+            else:
+                print(f"  No chain data for {ticker}. Run: python -m apex_sharpe backtest-all 1")
+
+    elif mode == "event-study":
+        from .agents.trade_backtest import TradeStructureBacktest
+        bt = TradeStructureBacktest(
+            config=config.trade_backtest,
+            zero_dte_config=config.zero_dte,
+            sizing_config=config.signal_sizing,
+            selector_config=config.adaptive_selector,
+            crs_config=config.call_ratio_spread,
+            bwb_config=config.broken_wing_butterfly,
+        )
+        event = sys.argv[2] if len(sys.argv) > 2 else None
+        if event and event not in bt.EVENTS:
+            # Check if it's custom dates: event-study 2020-01-01 2020-06-30
+            if len(sys.argv) > 3:
+                bt.run_event_study(orats, state,
+                                    custom_start=sys.argv[2],
+                                    custom_end=sys.argv[3])
+            else:
+                bt.run_event_study(orats, state)  # prints available events
+        else:
+            bt.run_event_study(orats, state, event_name=event)
+
+    elif mode == "regime-backtest":
+        from .agents.trade_backtest import TradeStructureBacktest
+        bt = TradeStructureBacktest(
+            config=config.trade_backtest,
+            zero_dte_config=config.zero_dte,
+            sizing_config=config.signal_sizing,
+            selector_config=config.adaptive_selector,
+            crs_config=config.call_ratio_spread,
+            bwb_config=config.broken_wing_butterfly,
+        )
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+        bt.run_regime_backtest(orats, state, months=months)
+
+    elif mode == "regime-classify":
+        from .agents.regime_classifier import VolSurfaceRegimeClassifier
+        classifier = VolSurfaceRegimeClassifier()
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPX"
+        resp = orats.summaries(ticker)
+        if resp and resp.get("data"):
+            summary = resp["data"][0]
+            result = classifier.classify(summary)
+            classifier.print_regime(result)
+        else:
+            print(f"  No live summary for {ticker}. Trying historical...")
+            from datetime import date, timedelta
+            for days_back in range(1, 8):
+                d = (date.today() - timedelta(days=days_back)).strftime("%Y-%m-%d")
+                resp = orats.hist_summaries(ticker, d)
+                if resp and resp.get("data"):
+                    result = classifier.classify(resp["data"][0])
+                    print(f"  (Using data from {d})")
+                    classifier.print_regime(result)
+                    break
+            else:
+                print(f"  No data for {ticker}")
+
+    elif mode == "signal-discover":
+        from .agents.signal_discovery import SignalDiscoveryAgent
+        ticker = sys.argv[2] if len(sys.argv) > 2 else "SPX"
+        loader = None
+        try:
+            from .data.historical_loader import HistoricalLoader
+            loader = HistoricalLoader(config.state.market_data_dir
+                                       if hasattr(config.state, "market_data_dir")
+                                       else "/Volumes/A Drive/MasterProject/market_data")
+        except Exception:
+            print("  [WARN] HistoricalLoader not available — running ORATS-only discovery")
+        agent = SignalDiscoveryAgent()
+        agent.discover(loader=loader, ticker=ticker)
+
+    elif mode == "signal-analysis":
+        from .agents.trade_backtest import TradeStructureBacktest
+        months = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+        bt = TradeStructureBacktest()
+        bt.run_signal_analysis(orats, state, months=months)
 
     elif mode == "leaps":
         from .pipelines.leaps_pipeline import LEAPSPipeline
@@ -713,6 +884,164 @@ def main() -> None:
                           f" {row.get('callSmvVol', 0):>7.1%}")
             else:
                 print(f"  No chain data for {ticker} {expiry}")
+
+    # -- Intraday Data Collection -----------------------------------------------
+
+    elif mode in ("ib-collect", "ib_collect"):
+        from .data.intraday_collector import IntradayCollector
+        sub = sys.argv[2] if len(sys.argv) > 2 else "live"
+        ib_client = None
+        if config.ib.enabled:
+            from .data.ib_client import IBClient
+            try:
+                ib_client = IBClient(config.ib)
+                ib_client.connect()
+            except Exception as exc:
+                print(f"  IB: {exc} (ORATS only)")
+
+        collector = IntradayCollector(
+            ib_client=ib_client, orats_client=orats)
+
+        if sub == "live":
+            tickers = sys.argv[3].split(",") if len(sys.argv) > 3 else None
+            interval = int(sys.argv[4]) if len(sys.argv) > 4 else 120
+            collector.run_live(tickers=tickers, interval=interval)
+
+        elif sub == "backfill":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPX"
+            duration = sys.argv[4] if len(sys.argv) > 4 else "30 D"
+            bar_size = sys.argv[5] if len(sys.argv) > 5 else "1 min"
+            collector.backfill_bars(ticker, duration, bar_size)
+
+        elif sub == "backfill-5m":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPX"
+            duration = sys.argv[4] if len(sys.argv) > 4 else "120 D"
+            collector.backfill_5min(ticker, duration)
+
+        elif sub == "backfill-1h":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPX"
+            duration = sys.argv[4] if len(sys.argv) > 4 else "1 Y"
+            collector.backfill_hourly(ticker, duration)
+
+        elif sub == "status":
+            days = collector.get_available_days(
+                sys.argv[3] if len(sys.argv) > 3 else "SPX")
+            if days:
+                print(f"\n  Stored intraday data:")
+                for day, info in sorted(days.items()):
+                    print(f"    {day}: {info['ib_bars']} bars, "
+                          f"{info['orats_snapshots']} ORATS snapshots")
+            else:
+                print("  No intraday data stored yet")
+
+        elif sub == "day":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPX"
+            day = sys.argv[4] if len(sys.argv) > 4 else date.today().isoformat()
+            collector.print_day(ticker, day)
+
+        else:
+            print("ib-collect sub-commands: live, backfill, backfill-5m, "
+                  "backfill-1h, status, day")
+
+        if ib_client:
+            ib_client.disconnect()
+
+    # -- Chain Ingestion -------------------------------------------------------
+
+    elif mode in ("chain-ingest", "chain_ingest"):
+        from .agents.chain_ingest import ChainIngestAgent
+        sub = sys.argv[2] if len(sys.argv) > 2 else "poll"
+
+        # Build agent with appropriate sources
+        ib_client = None
+        if config.chain_ingest.source == "ib" or sub == "poll-ib":
+            try:
+                from .data.ib_client import IBClient
+                ib_client = IBClient(config.ib)
+                ib_client.connect()
+            except Exception as exc:
+                print(f"  IB not available: {exc}")
+                if config.chain_ingest.source == "ib":
+                    print("  Falling back to ORATS")
+
+        agent = ChainIngestAgent(
+            config=config.chain_ingest,
+            supabase_cfg=config.supabase,
+            orats=orats,
+            ib_client=ib_client,
+        )
+
+        if sub == "poll":
+            # Continuous polling loop
+            tickers = sys.argv[3].split(",") if len(sys.argv) > 3 else None
+            ctx = {"action": "poll"}
+            if tickers:
+                ctx["tickers"] = tickers
+            agent.run(ctx)
+
+        elif sub == "once":
+            # Single snapshot
+            tickers = sys.argv[3].split(",") if len(sys.argv) > 3 else None
+            ctx = {"action": "ingest"}
+            if tickers:
+                ctx["tickers"] = tickers
+            result = agent.run(ctx)
+            if result.success:
+                print(f"  Stored {result.data['rows_inserted']} rows")
+            else:
+                for e in result.errors:
+                    print(f"  Error: {e}")
+
+        elif sub == "latest":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            expiry = sys.argv[4] if len(sys.argv) > 4 else None
+            ctx = {"action": "latest", "ticker": ticker}
+            if expiry:
+                ctx["expiry"] = expiry
+            result = agent.run(ctx)
+            agent.print_latest(result)
+
+        elif sub == "history":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPY"
+            start = sys.argv[4] if len(sys.argv) > 4 else None
+            ctx = {"action": "history", "ticker": ticker}
+            if start:
+                ctx["start"] = start
+            result = agent.run(ctx)
+            agent.print_history(result)
+
+        elif sub == "backfill-bars":
+            ticker = sys.argv[3] if len(sys.argv) > 3 else "SPX"
+            duration = sys.argv[4] if len(sys.argv) > 4 else "30 D"
+            bar_size = sys.argv[5] if len(sys.argv) > 5 else "1 min"
+            result = agent.run({
+                "action": "backfill_bars",
+                "ticker": ticker,
+                "duration": duration,
+                "bar_size": bar_size,
+            })
+            if not result.success:
+                for e in result.errors:
+                    print(f"  Error: {e}")
+
+        elif sub == "status":
+            result = agent.run({"action": "status"})
+            agent.print_status(result)
+
+        elif sub == "schema":
+            result = agent.run({"action": "ensure_schema"})
+            if result.success:
+                print(f"  All tables OK: {', '.join(result.data.get('ok', []))}")
+            else:
+                for e in result.errors:
+                    print(f"  {e}")
+
+        else:
+            print("chain-ingest sub-commands: poll, once, latest, history,"
+                  " backfill-bars, status, schema")
+
+        if ib_client:
+            ib_client.disconnect()
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

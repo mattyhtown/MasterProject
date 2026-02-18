@@ -31,6 +31,7 @@ from ..agents.strategy import (
     CallDebitSpreadAgent, BullPutSpreadAgent, LongCallAgent,
     CallRatioSpreadAgent, BrokenWingButterflyAgent,
     PutDebitSpreadAgent, LongPutAgent,
+    BearCallSpreadAgent, IronButterflyAgent, ShortIronCondorAgent,
 )
 from ..config import AppConfig
 from ..data.orats_client import ORATSClient
@@ -48,12 +49,16 @@ STRATEGY_AGENTS = {
     TradeStructure.BROKEN_WING_BUTTERFLY: BrokenWingButterflyAgent,
     TradeStructure.PUT_DEBIT_SPREAD: PutDebitSpreadAgent,
     TradeStructure.LONG_PUT: LongPutAgent,
+    TradeStructure.BEAR_CALL_SPREAD: BearCallSpreadAgent,
+    TradeStructure.IRON_BUTTERFLY: IronButterflyAgent,
+    TradeStructure.SHORT_IRON_CONDOR: ShortIronCondorAgent,
 }
 
 # Bearish structures for flip logic
 BEARISH_STRUCTURES = {
     TradeStructure.PUT_DEBIT_SPREAD,
     TradeStructure.LONG_PUT,
+    TradeStructure.BEAR_CALL_SPREAD,
 }
 
 BULLISH_STRUCTURES = {
@@ -62,6 +67,11 @@ BULLISH_STRUCTURES = {
     TradeStructure.LONG_CALL,
     TradeStructure.CALL_RATIO_SPREAD,
     TradeStructure.BROKEN_WING_BUTTERFLY,
+}
+
+NEUTRAL_STRUCTURES = {
+    TradeStructure.IRON_BUTTERFLY,
+    TradeStructure.SHORT_IRON_CONDOR,
 }
 
 
@@ -94,33 +104,74 @@ class DirectionalPipeline:
         return self._strategy_cache[structure]
 
     def _select_bearish_structure(self, summary: Dict,
-                                  core_count: int) -> Optional[TradeStructure]:
+                                  core_count: int,
+                                  composite: str = None,
+                                  gc: Dict = None) -> Optional[TradeStructure]:
         """Select the best bearish structure for a flip.
 
         Uses AdaptiveSelector but filters to bearish structures only.
         """
-        ranked = self.portfolio.selector.select(summary, core_count)
+        gc = gc or {}
+        ranked = self.portfolio.selector.select(
+            summary, core_count,
+            composite=composite,
+            groups_firing=gc.get("groups_firing", 0),
+            wing_count=gc.get("wing_count", 0),
+            fund_count=gc.get("fund_count", 0),
+            mom_count=gc.get("mom_count", 0),
+        )
         for structure, reason in ranked:
             if structure in BEARISH_STRUCTURES:
                 return structure
         return TradeStructure.PUT_DEBIT_SPREAD  # default fallback
 
-    def _check_flip_signals(self, signals: Dict, composite: str) -> bool:
+    @staticmethod
+    def _compute_group_counts(signals: Dict, cfg) -> Dict[str, int]:
+        """Compute signal group counts from full signals dict."""
+        core_f = [k for k in cfg.core_signals
+                  if signals.get(k, {}).get("level") == "ACTION"]
+        wing_f = [k for k in cfg.wing_signals
+                  if signals.get(k, {}).get("level") == "ACTION"]
+        fund_f = [k for k in cfg.funding_signals
+                  if signals.get(k, {}).get("level") == "ACTION"]
+        mom_f = [k for k in cfg.momentum_signals
+                 if signals.get(k, {}).get("level") == "ACTION"]
+        grps = sum([len(core_f) >= 2, len(wing_f) >= 1,
+                    len(fund_f) >= 1, len(mom_f) >= 1])
+        return {
+            "core_count": len(core_f),
+            "wing_count": len(wing_f),
+            "fund_count": len(fund_f),
+            "mom_count": len(mom_f),
+            "groups_firing": grps,
+        }
+
+    def _check_flip_signals(self, signals: Dict, composite: str,
+                            group_counts: Dict) -> bool:
         """Check if conditions favor a bearish flip.
 
         Flip triggers when:
           - Composite signal is still firing (fear persists)
-          - Skewing is spiking (put demand surging)
-          - Contango is collapsing (near-term fear)
+          - Skewing is spiking + contango collapsing (original trigger), OR
+          - Wing panic (both wing signals at ACTION), OR
+          - 3+ groups firing (overwhelming multi-group confirmation)
         """
         if not composite:
             return False
         skewing = signals.get("skewing", {})
         contango = signals.get("contango", {})
-        # Both must be at ACTION level for a flip
         sk_action = skewing.get("level") == "ACTION"
         ct_action = contango.get("level") == "ACTION"
-        return sk_action and ct_action
+        # Original trigger
+        if sk_action and ct_action:
+            return True
+        # Wing panic trigger
+        if group_counts.get("wing_count", 0) >= 2:
+            return True
+        # Multi-group overwhelming
+        if group_counts.get("groups_firing", 0) >= 3:
+            return True
+        return False
 
     def run_live(self, db=None) -> None:
         """Live polling with portfolio-aware trade generation + flip logic.
@@ -188,19 +239,17 @@ class DirectionalPipeline:
                     self.monitor.print_dashboard(
                         ticker, spot, spot_yf, signals, composite, t1)
 
-                    core_count = len([
-                        k for k in cfg.core_signals
-                        if signals.get(k, {}).get("level") == "ACTION"
-                    ])
+                    gc = self._compute_group_counts(signals, cfg)
+                    core_count = gc["core_count"]
 
                     # -- Flip logic: check open bullish positions --
                     active = active_trades.get(ticker)
                     if (active and active["direction"] == "bull"
                             and not active.get("flipped")):
                         # Check if signals now favor bearish flip
-                        if self._check_flip_signals(signals, composite):
+                        if self._check_flip_signals(signals, composite, gc):
                             bear_structure = self._select_bearish_structure(
-                                summary, core_count)
+                                summary, core_count, composite, gc)
                             print(f"\n  {C.BOLD}{C.RED}FLIP SIGNAL{C.RESET} "
                                   f"— {ticker} bullish "
                                   f"{active['structure'].value} → "
@@ -214,7 +263,11 @@ class DirectionalPipeline:
                                 chain_resp = self.orats.chain(ticker, "")
                                 if chain_resp and chain_resp.get("data"):
                                     sizing = self.portfolio.sizer.compute(
-                                        core_count)
+                                        core_count, composite=composite,
+                                        groups_firing=gc["groups_firing"],
+                                        wing_count=gc["wing_count"],
+                                        fund_count=gc["fund_count"],
+                                        mom_count=gc["mom_count"])
                                     bear_result = bear_agent.run({
                                         "chain": chain_resp["data"],
                                         "spot": spot,
@@ -245,10 +298,16 @@ class DirectionalPipeline:
 
                     # -- Open new position if composite and no active trade --
                     elif composite and ticker not in active_trades:
+                        cal = self.monitor.calendar_overlay()
                         portfolio_result = self.portfolio.run({
                             "signals": {
                                 "composite": composite,
                                 "core_count": core_count,
+                                "groups_firing": gc["groups_firing"],
+                                "wing_count": gc["wing_count"],
+                                "fund_count": gc["fund_count"],
+                                "mom_count": gc["mom_count"],
+                                "calendar_modifier": cal["calendar_modifier"],
                                 "firing": t1,
                             },
                             "chain": [],

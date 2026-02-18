@@ -175,7 +175,38 @@ ZERO_DTE_TABLES = {
     """,
 }
 
-ALL_TABLES = {**IC_PIPELINE_TABLES, **ZERO_DTE_TABLES}
+CHAIN_INGEST_TABLES = {
+    "intraday_chains": """
+        CREATE TABLE IF NOT EXISTS intraday_chains (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            snapshot_time TIMESTAMPTZ NOT NULL,
+            ticker TEXT NOT NULL,
+            expir_date DATE NOT NULL,
+            strike NUMERIC NOT NULL,
+            stock_price NUMERIC,
+            call_bid NUMERIC,
+            call_ask NUMERIC,
+            call_value NUMERIC,
+            call_iv NUMERIC,
+            put_bid NUMERIC,
+            put_ask NUMERIC,
+            put_value NUMERIC,
+            put_iv NUMERIC,
+            delta NUMERIC,
+            gamma NUMERIC,
+            theta NUMERIC,
+            vega NUMERIC,
+            source TEXT NOT NULL DEFAULT 'orats',
+            created_at TIMESTAMPTZ DEFAULT now()
+        );
+        CREATE INDEX IF NOT EXISTS idx_intraday_chains_lookup
+            ON intraday_chains (ticker, expir_date, snapshot_time DESC);
+        CREATE INDEX IF NOT EXISTS idx_intraday_chains_time
+            ON intraday_chains (snapshot_time DESC);
+    """,
+}
+
+ALL_TABLES = {**IC_PIPELINE_TABLES, **ZERO_DTE_TABLES, **CHAIN_INGEST_TABLES}
 
 
 class DatabaseAgent(BaseAgent):
@@ -338,7 +369,10 @@ class DatabaseAgent(BaseAgent):
             spot_price: float
             composite: Optional[str]
             core_count: int
-            signals: Dict — full signal dict from ZeroDTEAgent
+            wing_count, fund_count, mom_count: int (optional)
+            groups_firing: int (optional)
+            regime: str (optional)
+            signals: Dict — full signal dict from ZeroDTEAgent (20 signals)
         """
         try:
             row = {
@@ -347,6 +381,11 @@ class DatabaseAgent(BaseAgent):
                 "spot_price": context.get("spot_price"),
                 "composite": context.get("composite"),
                 "core_count": context.get("core_count", 0),
+                "wing_count": context.get("wing_count", 0),
+                "fund_count": context.get("fund_count", 0),
+                "mom_count": context.get("mom_count", 0),
+                "groups_firing": context.get("groups_firing", 0),
+                "regime": context.get("regime"),
                 "signals": json.dumps({
                     k: {kk: vv for kk, vv in v.items() if kk != "label"}
                     for k, v in context.get("signals", {}).items()
