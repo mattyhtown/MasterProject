@@ -1,6 +1,9 @@
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
+
+import pytest
 
 from apex_sharpe.governance.edge_ledger import (
     GraduationEvidence,
@@ -115,3 +118,34 @@ def test_historian_corrections_are_new_events(tmp_path: Path):
     assert first["event_id"] == original.event_id
     assert second["corrects_event_id"] == original.event_id
     assert first["payload"]["signal"] == 1.0
+
+
+def test_historian_rejects_unknown_correction_target(tmp_path: Path):
+    orphan = HistorianEvent(
+        event_type="edge_correction",
+        observed_at="2026-09-19T15:00:00Z",
+        recorded_at="2026-09-19T19:00:00+00:00",
+        source="test",
+        payload={"signal": 0.0},
+        corrects_event_id="missing-event",
+    )
+    with pytest.raises(ValueError, match="correction target"):
+        append_historian_event(orphan, root=str(tmp_path))
+    assert list(tmp_path.glob("*.jsonl")) == []
+
+
+def test_historian_rejects_non_strict_payload():
+    with pytest.raises(ValueError, match="non-finite"):
+        HistorianEvent(
+            event_type="edge_observation",
+            observed_at="2026-09-19T14:30:00Z",
+            source="test",
+            payload={"signal": float("nan")},
+        ).canonical()
+    with pytest.raises(ValueError, match="strict JSON"):
+        HistorianEvent(
+            event_type="edge_observation",
+            observed_at="2026-09-19T14:30:00Z",
+            source="test",
+            payload={"when": datetime(2026, 9, 19, tzinfo=timezone.utc)},
+        ).canonical()

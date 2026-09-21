@@ -36,7 +36,8 @@ The canonical record is append-only.
 
 - Preserve source, observation timestamp and recording timestamp.
 - Preserve raw facts separately from derived features and agent interpretations.
-- Corrections are new events linked by `corrects_event_id`; never overwrite the original.
+- Corrections are new events linked by `corrects_event_id`; never overwrite the original. A correction is rejected if that ID is not already in the historian.
+- Payloads must be strict JSON. Non-finite numbers and implicit stringification of dates or other objects are rejected.
 - Record model/version for probabilistic classifications.
 - Hash every canonical event.
 - Never permit Jev-class systems, LLMs or adaptive agents to mutate canonical history.
