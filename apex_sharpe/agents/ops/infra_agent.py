@@ -123,6 +123,7 @@ class InfraAgent(BaseAgent):
         optional = {
             "SUPABASE_URL": "Supabase project URL",
             "SUPABASE_KEY": "Supabase anon key",
+            "UNUSUAL_WHALES_API_KEY": "Unusual Whales API (research/paper only)",
         }
 
         # Try loading .env first

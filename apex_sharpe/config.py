@@ -42,6 +42,13 @@ class OratsCfg:
 
 
 @dataclass(frozen=True)
+class UnusualWhalesCfg:
+    api_key: str = ""
+    base_url: str = "https://api.unusualwhales.com"
+    timeout: int = 30
+
+
+@dataclass(frozen=True)
 class SupabaseCfg:
     url: str = ""
     key: str = ""
@@ -355,6 +362,7 @@ class StateCfg:
 class AppConfig:
     """Top-level config composing all sub-configs."""
     orats: OratsCfg = field(default_factory=OratsCfg)
+    unusual_whales: UnusualWhalesCfg = field(default_factory=UnusualWhalesCfg)
     supabase: SupabaseCfg = field(default_factory=SupabaseCfg)
     scanner: ScannerCfg = field(default_factory=ScannerCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
@@ -410,6 +418,9 @@ def load_config() -> AppConfig:
     return AppConfig(
         orats=OratsCfg(
             token=_env("ORATS_TOKEN"),
+        ),
+        unusual_whales=UnusualWhalesCfg(
+            api_key=_env("UNUSUAL_WHALES_API_KEY"),
         ),
         supabase=SupabaseCfg(
             url=_env("SUPABASE_URL"),
