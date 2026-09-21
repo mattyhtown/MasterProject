@@ -47,6 +47,7 @@ Usage:
     python -m apex_sharpe signal-discover — Mine untapped ORATS fields + cross-asset for new signals
     python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
     python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
+    python -m apex_sharpe uw-flow         — Unusual Whales flow alerts (research/paper only)
 """
 
 import sys
@@ -115,6 +116,9 @@ Interactive Brokers:
   ib-chain        Fetch live option chain from IB
   ib-collect      Intraday price + vol surface data (live/backfill/status)
   chain-ingest    Intraday chain snapshots → Supabase (poll/latest/history)
+
+Research data (paper only):
+  uw-flow         Unusual Whales flow alerts [ticker] [limit]
 """
 
 
@@ -1042,6 +1046,46 @@ def main() -> None:
 
         if ib_client:
             ib_client.disconnect()
+
+    # -- Unusual Whales (research / paper-data only) -----------------------
+
+    elif mode in ("uw-flow", "uw_flow"):
+        from .data.unusual_whales import UnusualWhalesClient, UnusualWhalesError
+
+        ticker = sys.argv[2] if len(sys.argv) > 2 else ""
+        limit = sys.argv[3] if len(sys.argv) > 3 else "20"
+        params = {"limit": limit}
+        if ticker:
+            params["ticker_symbol"] = ticker
+        print("  Unusual Whales flow alerts — research/paper only, no live trading")
+        try:
+            uw = UnusualWhalesClient(config.unusual_whales)
+            payload = uw.flow_alerts(**params)
+        except UnusualWhalesError as exc:
+            print(f"  [ERROR] {exc}")
+            sys.exit(1)
+        rows = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            print(f"  Unexpected response shape: {type(payload).__name__}")
+            print(f"  Keys: {list(payload.keys()) if isinstance(payload, dict) else '-'}")
+            sys.exit(0)
+        if not rows:
+            print("  No flow alerts returned")
+            sys.exit(0)
+        print(f"  {len(rows)} alert(s)"
+              + (f" for {ticker}" if ticker else ""))
+        print(f"  {'Ticker':<8} {'Prem':>12} {'Size':>8} {'Chain'}")
+        print(f"  {'-' * 52}")
+        for row in rows[: int(limit) if str(limit).isdigit() else 20]:
+            if not isinstance(row, dict):
+                continue
+            prem = row.get("total_premium", row.get("premium", ""))
+            size = row.get("total_size", row.get("size", ""))
+            chain = row.get("option_chain", row.get("option_symbol", ""))
+            print(f"  {str(row.get('ticker', '')):<8}"
+                  f" {str(prem):>12}"
+                  f" {str(size):>8}"
+                  f" {chain}")
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

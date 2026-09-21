@@ -12,7 +12,7 @@ apex_sharpe/
     backtest/       ExtendedBacktest, RegimeClassifier
     research/       DataCatalog, Research, Librarian, Pattern, Macro, StrategyDev
   pipelines/        IC, ZeroDTE, Directional, LEAPS
-  data/             ORATSClient, StateManager, HistoricalLoader, yfinance
+  data/             ORATSClient, UnusualWhalesClient, StateManager, HistoricalLoader, yfinance
   selection/        SignalSizer, AdaptiveSelector
   database/         SupabaseSync
   tests/            217 tests
@@ -74,7 +74,8 @@ cd MasterProject
 
 # Environment
 cp .env.example .env
-# Edit .env with your ORATS_TOKEN (required), SUPABASE_URL/KEY (optional)
+# Edit .env with your ORATS_TOKEN (required), SUPABASE_URL/KEY (optional).
+# UNUSUAL_WHALES_API_KEY is optional next to ORATS (research/paper flow data).
 
 # Dependencies
 pip install -r requirements.txt
@@ -122,6 +123,7 @@ python -m apex_sharpe research correlation|returns|drawdown|compare|screen
 python -m apex_sharpe patterns seasonal|mr|momentum|events|vol [ticker]
 python -m apex_sharpe macro dashboard|risk|yield|rotation|signals
 python -m apex_sharpe strategy-scan [ticker]            # Strategy development
+python -m apex_sharpe uw-flow [ticker] [limit]          # Unusual Whales flow (paper/research)
 ```
 
 ## Docker
@@ -135,6 +137,7 @@ docker compose up                       # Runs trading + monitor + health
 
 - **Python 3.13** — stdlib-first (urllib, json, dataclasses, pathlib)
 - **ORATS API** — options data, vol surface, IV rank, historical chains
+- **Unusual Whales API** — optional flow alerts / option trades (research/paper only)
 - **yfinance** — spot price cross-checks
 - **Supabase** — optional trade persistence
 - **pytest** — 217 tests

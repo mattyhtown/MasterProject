@@ -18,10 +18,13 @@ except ImportError:
 
 from .orats_client import ORATSClient
 from .state import StateManager
+from .unusual_whales import UnusualWhalesClient, UnusualWhalesError
 from .yfinance_client import yf_price, yf_credit
 
 __all__ = [
     "ORATSClient",
+    "UnusualWhalesClient",
+    "UnusualWhalesError",
     "StateManager",
     "yf_price",
     "yf_credit",
