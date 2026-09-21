@@ -11,7 +11,7 @@ from enum import Enum
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import uuid4
 
 
@@ -76,12 +76,20 @@ class HistorianEvent:
         return json.dumps(asdict(self), sort_keys=True, separators=(",", ":"), default=str)
 
 
+def _utc_partition_date(recorded_at: str) -> str:
+    """UTC calendar date for the JSONL partition, independent of source offset."""
+    dt = datetime.fromisoformat(recorded_at)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).date().isoformat()
+
+
 def append_historian_event(event: HistorianEvent, root: str = "data/historian") -> Path:
     """Append an immutable event to a UTC-date JSONL partition.
 
     This function intentionally has no update/delete path.
     """
-    day = event.recorded_at[:10]
+    day = _utc_partition_date(event.recorded_at)
     path = Path(root) / f"{day}.jsonl"
     path.parent.mkdir(parents=True, exist_ok=True)
     body = event.canonical()
@@ -107,7 +115,15 @@ class GraduationEvidence:
 
 
 def evaluate_graduation(current: GraduationStage, e: GraduationEvidence) -> GraduationStage:
-    """Conservative one-step graduation. No metric can skip a stage."""
+    """Conservative one-step graduation. No metric can skip a stage.
+
+    Stage-specific proof is required to *leave* that stage, not to enter it.
+    ``shadow_passed`` graduates out of SHADOW; ``small_capital_passed``
+    graduates out of SMALL_CAPITAL. Retired edges stay retired.
+    """
+    if current == GraduationStage.RETIRED:
+        return GraduationStage.RETIRED
+
     base = (
         e.out_of_sample
         and e.walk_forward_recent
@@ -116,12 +132,14 @@ def evaluate_graduation(current: GraduationStage, e: GraduationEvidence) -> Grad
         and e.data_integrity_passed
         and e.failure_criteria_defined
     )
-    if current == GraduationStage.RESEARCH and base:
+    if not base:
+        return current
+    if current == GraduationStage.RESEARCH:
         return GraduationStage.WALK_FORWARD
-    if current == GraduationStage.WALK_FORWARD and base and e.shadow_passed:
+    if current == GraduationStage.WALK_FORWARD:
         return GraduationStage.SHADOW
-    if current == GraduationStage.SHADOW and base and e.shadow_passed:
+    if current == GraduationStage.SHADOW and e.shadow_passed:
         return GraduationStage.SMALL_CAPITAL
-    if current == GraduationStage.SMALL_CAPITAL and base and e.small_capital_passed:
+    if current == GraduationStage.SMALL_CAPITAL and e.small_capital_passed:
         return GraduationStage.SCALED
     return current

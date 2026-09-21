@@ -28,7 +28,7 @@ Every candidate receives a stable `edge_id` before evaluation. The record must s
 
 `research -> walk_forward -> shadow -> small_capital -> scaled`
 
-Graduation requires point-in-time data, out-of-sample validation, realistic costs, sufficient observations, explicit failure criteria and a clean integrity check. Promotion is one stage at a time. Demotion/retirement is always allowed.
+Graduation requires point-in-time data, out-of-sample validation, realistic costs, sufficient observations, explicit failure criteria and a clean integrity check. Promotion is one stage at a time. Stage-specific proof (`shadow_passed`, `small_capital_passed`) is required to leave that stage, not to enter it — otherwise an edge could never start shadow or small-capital observation. Demotion/retirement is always allowed and is an explicit operator action, not a promotion result.
 
 ## Historian contract
 

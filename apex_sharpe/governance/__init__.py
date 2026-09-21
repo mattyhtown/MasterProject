@@ -4,6 +4,7 @@ from .edge_ledger import (
     Book,
     EdgeClass,
     EdgeRecord,
+    GraduationEvidence,
     GraduationStage,
     HistorianEvent,
     append_historian_event,
@@ -11,6 +12,12 @@ from .edge_ledger import (
 )
 
 __all__ = [
-    "Book", "EdgeClass", "EdgeRecord", "GraduationStage",
-    "HistorianEvent", "append_historian_event", "evaluate_graduation",
+    "Book",
+    "EdgeClass",
+    "EdgeRecord",
+    "GraduationEvidence",
+    "GraduationStage",
+    "HistorianEvent",
+    "append_historian_event",
+    "evaluate_graduation",
 ]
