@@ -415,6 +415,43 @@ class IBClient:
 
     # -- Order execution -----------------------------------------------------
 
+    def _order_contract(self, legs: List[Dict], action: str):
+        mod = _ensure_ib_async()
+        if not legs:
+            raise ValueError("An order requires at least one leg")
+        contracts = [
+            self._option(
+                leg["symbol"], leg["expiry"], leg["strike"], leg["right"],
+                trading_class=leg.get("trading_class", ""),
+            )
+            for leg in legs
+        ]
+        qualified = self._ib.qualifyContracts(*contracts)
+        if len(qualified) != len(legs) or any(
+            contract is None or not contract.conId for contract in qualified
+        ):
+            raise ValueError("Could not qualify all order legs")
+        if len(legs) == 1 and legs[0].get("ratio", 1) == 1:
+            return qualified[0], legs[0]["action"]
+
+        combo = mod.Contract()
+        combo.symbol = legs[0]["symbol"].upper()
+        combo.secType = "BAG"
+        combo.currency = "USD"
+        combo.exchange = "SMART"
+        combo_legs = []
+        for leg, contract in zip(legs, qualified):
+            cl = mod.ComboLeg()
+            cl.conId = contract.conId
+            cl.ratio = leg.get("ratio", 1)
+            # BAG leg directions are relative to a BUY of the combo.
+            cl.action = (leg["action"] if action == "BUY" else
+                         "SELL" if leg["action"] == "BUY" else "BUY")
+            cl.exchange = "SMART"
+            combo_legs.append(cl)
+        combo.comboLegs = combo_legs
+        return combo, action
+
     def place_combo_order(self, legs: List[Dict], action: str = "SELL",
                           quantity: int = 1, limit_price: float = 0.0,
                           timeout: int = 60) -> Dict:
@@ -432,36 +469,9 @@ class IBClient:
         """
         mod = _ensure_ib_async()
 
-        # Build and qualify individual contracts
-        option_contracts = []
-        for leg in legs:
-            opt = self._option(
-                leg["symbol"], leg["expiry"], leg["strike"], leg["right"],
-                trading_class=leg.get("trading_class", ""),
-            )
-            option_contracts.append(opt)
-
-        qualified = self._ib.qualifyContracts(*option_contracts)
-
-        # Build BAG contract
-        combo = mod.Contract()
-        combo.symbol = legs[0]["symbol"].upper()
-        combo.secType = "BAG"
-        combo.currency = "USD"
-        combo.exchange = "SMART"
-
-        combo_legs = []
-        for i, (leg, contract) in enumerate(zip(legs, qualified)):
-            cl = mod.ComboLeg()
-            cl.conId = contract.conId
-            cl.ratio = leg.get("ratio", 1)
-            cl.action = leg["action"]
-            cl.exchange = "SMART"
-            combo_legs.append(cl)
-        combo.comboLegs = combo_legs
-
-        # Place limit order
-        order = mod.LimitOrder(action, quantity, limit_price)
+        combo, order_action = self._order_contract(legs, action)
+        order = (mod.LimitOrder(order_action, quantity, limit_price)
+                 if limit_price > 0 else mod.MarketOrder(order_action, quantity))
         order.tif = "DAY"
 
         trade = self._ib.placeOrder(combo, order)
@@ -512,32 +522,9 @@ class IBClient:
         """
         mod = _ensure_ib_async()
 
-        option_contracts = []
-        for leg in legs:
-            opt = self._option(
-                leg["symbol"], leg["expiry"], leg["strike"], leg["right"],
-                trading_class=leg.get("trading_class", ""),
-            )
-            option_contracts.append(opt)
-        self._ib.qualifyContracts(*option_contracts)
-
-        combo = mod.Contract()
-        combo.symbol = legs[0]["symbol"].upper()
-        combo.secType = "BAG"
-        combo.currency = "USD"
-        combo.exchange = "SMART"
-
-        combo_legs = []
-        for leg, contract in zip(legs, option_contracts):
-            cl = mod.ComboLeg()
-            cl.conId = contract.conId
-            cl.ratio = leg.get("ratio", 1)
-            cl.action = leg["action"]
-            cl.exchange = "SMART"
-            combo_legs.append(cl)
-        combo.comboLegs = combo_legs
-
-        order = mod.LimitOrder(action, quantity, limit_price)
+        combo, order_action = self._order_contract(legs, action)
+        order = (mod.LimitOrder(order_action, quantity, limit_price)
+                 if limit_price > 0 else mod.MarketOrder(order_action, quantity))
 
         try:
             wi = self._ib.whatIfOrder(combo, order)

@@ -7,6 +7,7 @@ slippage values are fabricated. No real brokerage execution occurs.
 
 from apex_sharpe.agents.executor import ExecutorAgent, _HAS_FILL_SIM
 from apex_sharpe.config import ExecutorCfg, MonitorCfg
+import pytest
 
 
 class TestExecutorAgent:
@@ -72,3 +73,23 @@ class TestExecutorAgent:
         fill = agent._simulate_leg_fill(leg, is_buy=True)
         assert isinstance(fill, float)
         assert fill > 0
+
+    def test_entry_credit_matches_leg_fills(self, sample_candidate):
+        position = ExecutorAgent().run({
+            "decisions": [{"candidate": sample_candidate, "decision": "ALLOW"}],
+        }).data["new_positions"][0]
+        net_credit = sum(
+            leg["entry_price"] * (1 if leg["action"] == "SELL" else -1)
+            for leg in position["legs"]
+        )
+        assert position["entry_credit"] == pytest.approx(net_credit)
+        assert position["max_profit"] == pytest.approx(
+            net_credit * 100 - position["commission"]
+        )
+
+    def test_same_day_position_ids_are_unique(self, sample_candidate):
+        agent = ExecutorAgent()
+        context = {"decisions": [{"candidate": sample_candidate, "decision": "ALLOW"}]}
+        first = agent.run(context).data["new_positions"][0]
+        second = agent.run(context).data["new_positions"][0]
+        assert first["id"] != second["id"]

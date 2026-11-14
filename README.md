@@ -84,6 +84,11 @@ pip install -r requirements.txt
 python -m pytest apex_sharpe/tests/ -v
 ```
 
+Configuration reads the repository-root `.env` (or the legacy
+`apex_sharpe/.env`), with existing environment variables taking precedence.
+Position state defaults to `~/positions.json`; state writes create missing
+directories and replace files atomically.
+
 ## CLI
 
 ```bash
@@ -132,6 +137,12 @@ python -m apex_sharpe uw-flow [ticker] [limit]          # Unusual Whales flow (p
 docker build -t apex-sharpe .
 docker compose up                       # Runs trading + monitor + health
 ```
+
+Docker images do not embed `.env`; Compose supplies it at runtime.
+For standalone containers, pass `--env-file .env` to `docker run`.
+
+Failed or offline IB closes leave positions open for retry. Expired positions
+require settlement reconciliation rather than an estimated zero-P&L close.
 
 ## Stack
 

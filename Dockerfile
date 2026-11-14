@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application
 COPY apex_sharpe/ apex_sharpe/
-COPY .env .env
 
 # Verify the package imports
 RUN python -c "from apex_sharpe.config import load_config; print('Config OK')"

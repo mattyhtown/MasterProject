@@ -87,6 +87,28 @@ class TestICPipelineScan:
 
 
 class TestICPipelineMonitor:
+    def test_expired_position_requires_reconciliation(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        state = StateManager(config.state)
+        state.save_positions([dict(SAMPLE_POSITION, expiration="2026-02-13")])
+        ICPipeline(config, mock_orats, state).run_monitor()
+        position = state.load_positions()[0]
+        assert position["status"] == "OPEN"
+        assert "settlement reconciliation" in position["close_error"]
+        assert "realized_pnl" not in position
+
+    def test_wrong_expiry_chain_is_not_used(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        state = StateManager(config.state)
+        state.save_positions([SAMPLE_POSITION])
+        mock_orats.chain.return_value = {"data": [
+            dict(row, expirDate="2026-03-20") for row in MOCK_CHAIN["data"]
+        ]}
+        pipeline = ICPipeline(config, mock_orats, state)
+        with patch.object(pipeline.monitor_agent, "run", wraps=pipeline.monitor_agent.run) as monitor:
+            pipeline.run_monitor()
+        assert monitor.call_args.args[0]["chain"]["data"] == []
+
     def test_monitor_with_open_position(self, mock_orats, tmp_path):
         config = _make_config(str(tmp_path))
         state = StateManager(config.state)

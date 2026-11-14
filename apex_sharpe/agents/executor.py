@@ -8,6 +8,7 @@ Optionally uses execution.FillSimulator for realistic fill modeling.
 from datetime import date
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from .base import BaseAgent
 from ..config import ExecutorCfg, MonitorCfg
@@ -87,14 +88,31 @@ class ExecutorAgent(BaseAgent):
                 continue
             cand = item["candidate"]
 
-            # Apply slippage: reduce credit received
-            fill_credit = round(cand["total_credit"] * (1 - cfg.slippage_pct), 2)
+            filled_legs = [
+                {
+                    "type": leg["type"],
+                    "strike": leg["strike"],
+                    "action": leg["action"],
+                    "entry_price": round(
+                        leg["price"] * (1 + cfg.slippage_pct if leg["action"] == "BUY"
+                                        else 1 - cfg.slippage_pct), 2
+                    ),
+                    "delta": round(leg["delta"], 4),
+                }
+                for leg in cand["legs"]
+            ]
+            fill_credit = round(sum(
+                leg["entry_price"] * (1 if leg["action"] == "SELL" else -1)
+                for leg in filled_legs
+            ), 2)
+            if fill_credit * 100 <= cfg.commission_per_ic:
+                continue
             max_profit = round(fill_credit * 100 - cfg.commission_per_ic, 2)
             max_width = max(cand["put_width"], cand["call_width"])
             max_loss = round(max_width * 100 - max_profit, 2)
 
             today_str = date.today().strftime("%Y-%m-%d")
-            position_id = f"IC-{cand['symbol']}-{today_str.replace('-', '')}"
+            position_id = f"IC-{cand['symbol']}-{today_str.replace('-', '')}-{uuid4().hex[:12]}"
 
             # Breakevens adjusted for fill
             sp_strike = next(l for l in cand["legs"] if l["action"] == "SELL" and l["type"] == "PUT")["strike"]
@@ -109,20 +127,7 @@ class ExecutorAgent(BaseAgent):
                 "entry_credit": fill_credit,
                 "entry_stock_price": cand["stock_price"],
                 "iv_rank_at_entry": cand.get("iv_rank"),
-                "legs": [
-                    {
-                        "type": leg["type"],
-                        "strike": leg["strike"],
-                        "action": leg["action"],
-                        "entry_price": round(
-                            leg["price"] * (1 + cfg.slippage_pct if leg["action"] == "BUY"
-                                            else 1 - cfg.slippage_pct if leg["action"] == "SELL"
-                                            else 1), 2
-                        ),
-                        "delta": round(leg["delta"], 4),
-                    }
-                    for leg in cand["legs"]
-                ],
+                "legs": filled_legs,
                 "max_profit": max_profit,
                 "max_loss": max_loss,
                 "breakeven_lower": round(sp_strike - fill_credit, 2),

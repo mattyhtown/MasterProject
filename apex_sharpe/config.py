@@ -15,15 +15,20 @@ from typing import List
 # ---------------------------------------------------------------------------
 
 def _load_env() -> None:
-    """Load .env from apex_sharpe root into os.environ (setdefault)."""
-    env_file = Path(__file__).resolve().parent / ".env"
-    if env_file.exists():
+    """Load root and legacy package .env files without overriding the environment."""
+    package_dir = Path(__file__).resolve().parent
+    for env_file in (package_dir.parent / ".env", package_dir / ".env"):
+        if not env_file.exists():
+            continue
         with open(env_file) as f:
             for line in f:
                 line = line.strip()
                 if line and not line.startswith("#") and "=" in line:
                     key, _, val = line.partition("=")
-                    os.environ.setdefault(key.strip(), val.strip())
+                    val = val.strip()
+                    if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
+                        val = val[1:-1]
+                    os.environ.setdefault(key.strip(), val)
 
 
 def _env(key: str, default: str = "") -> str:
@@ -349,7 +354,7 @@ class ResearchCfg:
 
 @dataclass(frozen=True)
 class StateCfg:
-    positions_path: str = "/Users/mh/positions.json"
+    positions_path: str = field(default_factory=lambda: str(Path.home() / "positions.json"))
     signals_path: str = ""    # resolved at load time
     cache_path: str = ""      # resolved at load time
 

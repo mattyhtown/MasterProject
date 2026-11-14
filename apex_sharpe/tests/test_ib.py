@@ -190,6 +190,61 @@ class TestIBClient:
         assert quote["bid"] == 690.50
         assert quote["ask"] == 690.80
 
+    @pytest.mark.parametrize("action", ["BUY", "SELL"])
+    def test_combo_preserves_intended_leg_directions(self, action):
+        from apex_sharpe.data import ib_client
+        client = self._make_client()
+        mod = ib_client._ib_async
+        mod.ComboLeg.side_effect = lambda: MagicMock()
+        client._option = MagicMock(side_effect=[
+            MagicMock(conId=1), MagicMock(conId=2),
+        ])
+        legs = [
+            {"symbol": "SPY", "expiry": "2026-03-13", "strike": 660,
+             "right": "P", "action": "SELL"},
+            {"symbol": "SPY", "expiry": "2026-03-13", "strike": 610,
+             "right": "P", "action": "BUY"},
+        ]
+        combo, order_action = client._order_contract(legs, action)
+        effective_actions = [
+            leg.action if order_action == "BUY"
+            else "BUY" if leg.action == "SELL" else "SELL"
+            for leg in combo.comboLegs
+        ]
+        assert effective_actions == ["SELL", "BUY"]
+
+    def test_single_leg_uses_option_contract(self):
+        client = self._make_client()
+        contract = MagicMock(conId=1)
+        client._option = MagicMock(return_value=contract)
+        leg = {"symbol": "SPY", "expiry": "2026-03-13", "strike": 660,
+               "right": "C", "action": "BUY"}
+        result, action = client._order_contract([leg], "BUY")
+        assert result is contract
+        assert action == "BUY"
+
+    def test_zero_price_close_uses_market_order(self):
+        from apex_sharpe.data import ib_client
+        client = self._make_client()
+        client._option = MagicMock(return_value=MagicMock(conId=1))
+        client._ib.placeOrder.return_value.fills = []
+        leg = {"symbol": "SPY", "expiry": "2026-03-13", "strike": 660,
+               "right": "C", "action": "SELL"}
+        client.place_combo_order([leg], action="SELL", limit_price=0.0)
+        ib_client._ib_async.MarketOrder.assert_called_once_with("SELL", 1)
+        ib_client._ib_async.LimitOrder.assert_not_called()
+
+    def test_unqualified_leg_prevents_order(self):
+        client = self._make_client()
+        client._option = MagicMock(return_value=MagicMock(conId=1))
+        client._ib.qualifyContracts.return_value = []
+        client._ib.qualifyContracts.side_effect = None
+        leg = {"symbol": "SPY", "expiry": "2026-03-13", "strike": 660,
+               "right": "C", "action": "BUY"}
+        with pytest.raises(ValueError, match="qualify"):
+            client.place_combo_order([leg], action="BUY", limit_price=1.0)
+        client._ib.placeOrder.assert_not_called()
+
 
 # ---------------------------------------------------------------------------
 # IBExecutorAgent tests
@@ -332,10 +387,49 @@ class TestIBExecutorAgent:
     def test_run_close_ib_disconnected(self, sample_position):
         executor, client = self._make_executor(connected=False)
         closed = executor.run_close(sample_position, "DTE", 100.0)
-        # Falls back to simulated close
-        assert closed["status"] == "CLOSED"
-        assert closed["exit_reason"] == "DTE"
-        assert "realized_pnl" in closed
+        assert closed["status"] == "OPEN"
+        assert "close_error" in closed
+        assert "realized_pnl" not in closed
+        client.place_combo_order.assert_not_called()
+
+    def test_failed_close_keeps_position_open(self, sample_position):
+        executor, client = self._make_executor()
+        client.place_combo_order.return_value = {"status": "CANCELLED_TIMEOUT"}
+        result = executor.run_close(sample_position, "DTE", 100.0)
+        assert result["status"] == "OPEN"
+        assert "CANCELLED_TIMEOUT" in result["close_error"]
+        assert "realized_pnl" not in result
+
+    def test_empty_account_has_no_positions(self):
+        executor, _ = self._make_executor()
+        executor.config = IBCfg(max_positions=1)
+        assert executor._check_position_limit() == (0, False)
+
+    def test_batch_stops_at_position_limit(self, sample_candidate):
+        executor, client = self._make_executor()
+        executor.config = IBCfg(max_positions=1)
+        client.what_if_order.return_value = None
+        client.place_combo_order.return_value = {
+            "status": "Filled", "avg_price": 3.0, "fills": [],
+            "order_id": 1, "perm_id": 1,
+        }
+        decision = {"candidate": sample_candidate, "decision": "ALLOW"}
+        result = executor.run({"decisions": [decision, decision]})
+        assert len(result.data["new_positions"]) == 1
+        client.place_combo_order.assert_called_once()
+        position = result.data["new_positions"][0]
+        assert position["max_profit"] == 300.0
+        assert position["max_loss"] == 4700.0
+
+    def test_realized_pnl_deducts_entry_and_exit_commissions(self, sample_position):
+        executor, client = self._make_executor()
+        client.place_combo_order.return_value = {
+            "status": "Filled", "avg_price": 1.0,
+            "fills": [{"commission": 2.6}],
+        }
+        position = dict(sample_position, commission=2.6)
+        closed = executor.run_close(position, "PROFIT_TARGET")
+        assert closed["realized_pnl"] == pytest.approx(292.8)
 
     def test_status_action(self):
         executor, client = self._make_executor()

@@ -121,13 +121,8 @@ class ICPipeline:
             dte = calculate_dte(expiry)
 
             if dte < 0:
-                print(f"\n  {pos['id']}: EXPIRED — closing")
-                updated = self.executor.run_close(pos, "EXPIRED", 0.0)
-                for i, p in enumerate(positions):
-                    if p["id"] == pos["id"]:
-                        positions[i] = updated
-                        break
-                closed_positions.append(updated)
+                print(f"\n  {pos['id']}: EXPIRED — settlement reconciliation required")
+                pos["close_error"] = "Expired position requires settlement reconciliation"
                 continue
 
             # Fetch live data
@@ -146,8 +141,7 @@ class ICPipeline:
             # Filter chain to target expiry
             if chain and chain.get("data"):
                 filtered = [s for s in chain["data"] if s.get("expirDate") == expiry]
-                if filtered:
-                    chain = dict(chain, data=filtered)
+                chain = dict(chain, data=filtered)
 
             # Run monitor agent
             mon_result = self.monitor_agent.run({
@@ -175,7 +169,8 @@ class ICPipeline:
                     if p["id"] == pos["id"]:
                         positions[i] = updated
                         break
-                closed_positions.append(updated)
+                if updated.get("status") == "CLOSED":
+                    closed_positions.append(updated)
 
         # Save + report
         self.state.save_positions(positions)

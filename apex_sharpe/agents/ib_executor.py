@@ -23,6 +23,7 @@ Safety features:
 """
 
 from datetime import date
+from uuid import uuid4
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import BaseAgent
@@ -315,7 +316,7 @@ class IBExecutorAgent(BaseAgent):
         current = self.ib.positions()
         opt_count = sum(1 for p in current if p["secType"] == "OPT")
         # Estimate: avg ~3 legs per position
-        est_positions = max(1, opt_count // 3)
+        est_positions = (opt_count + 2) // 3
         return est_positions, est_positions >= self.config.max_positions
 
     def _check_margin(self, ib_legs: List[Dict], combo_action: str,
@@ -354,7 +355,7 @@ class IBExecutorAgent(BaseAgent):
         """
         prefix = _STRUCTURE_PREFIX.get(structure, "TRD")
         today_str = date.today().strftime("%Y-%m-%d")
-        position_id = f"{prefix}-{symbol}-{today_str.replace('-', '')}"
+        position_id = f"{prefix}-{symbol}-{today_str.replace('-', '')}-{uuid4().hex[:12]}"
 
         # Single-leg orders don't use BAG
         if len(ib_legs) == 1 and ib_legs[0].get("ratio", 1) == 1:
@@ -489,8 +490,14 @@ class IBExecutorAgent(BaseAgent):
                 cand["stock_price"], 1, trade_meta,
             )
             if position:
+                credit = position["entry_credit"]
+                position["max_profit"] = round(credit * 100 - position["commission"], 2)
+                position["max_loss"] = round(max_width * 100 - position["max_profit"], 2)
+                position["breakeven_lower"] = round(sp_strike - credit, 2)
+                position["breakeven_upper"] = round(sc_strike + credit, 2)
                 new_positions.append(position)
                 pos_count += 1
+                limit_hit = pos_count >= self.config.max_positions
             if err:
                 errors.append(err)
 
@@ -648,11 +655,11 @@ class IBExecutorAgent(BaseAgent):
             if is_credit_trade:
                 realized_pnl = round(
                     (position["entry_credit"] - exit_price) * 100 * qty
-                    - total_commission, 2)
+                    - position.get("commission", 0) - total_commission, 2)
             else:
                 realized_pnl = round(
                     (exit_price - position.get("entry_cost", 0)) * 100 * qty
-                    - total_commission, 2)
+                    - position.get("commission", 0) - total_commission, 2)
 
             updated = dict(position)
             updated["status"] = "CLOSED"
@@ -678,17 +685,12 @@ class IBExecutorAgent(BaseAgent):
         """Close a position via IB (matches ExecutorAgent.run_close interface).
 
         Returns updated position dict (not AgentResult).
-        Falls back to simulated close if IB is not connected.
+        Leaves the position open if IB is offline or the close is not filled.
         """
         if not self.ib.is_connected:
             updated = dict(position)
-            updated["status"] = "CLOSED"
-            updated["exit_date"] = date.today().strftime("%Y-%m-%d")
-            updated["exit_reason"] = exit_reason
-            updated["realized_pnl"] = round(exit_pnl - self.executor_config.commission_per_ic, 2)
-            print(f"\n{C.BOLD}[IBExecutor]{C.RESET} CLOSED {position['id']} (simulated — IB offline)")
-            print(f"  Reason:       {exit_reason}")
-            print(f"  Realized P&L: ${updated['realized_pnl']:+.2f}")
+            updated["close_error"] = "IB offline — close not executed"
+            print(f"\n{C.BOLD}[IBExecutor]{C.RESET} Close deferred for {position['id']} — IB offline")
             return updated
 
         result = self._run_close(position, exit_reason)
@@ -696,11 +698,8 @@ class IBExecutorAgent(BaseAgent):
             return result.data["position"]
         else:
             updated = dict(position)
-            updated["status"] = "CLOSED"
-            updated["exit_date"] = date.today().strftime("%Y-%m-%d")
-            updated["exit_reason"] = f"{exit_reason} (IB close failed)"
-            updated["realized_pnl"] = round(exit_pnl - self.executor_config.commission_per_ic, 2)
-            print(f"  {C.YELLOW}IB close failed — using estimated P&L{C.RESET}")
+            updated["close_error"] = "; ".join(result.errors)
+            print(f"  {C.YELLOW}IB close failed — position remains open{C.RESET}")
             return updated
 
     # ------------------------------------------------------------------
