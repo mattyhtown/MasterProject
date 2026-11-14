@@ -18,6 +18,11 @@ import pytest
 
 pytestmark = pytest.mark.usefixtures("fixed_market_date")
 
+MONITOR_CHAIN = {"data": [
+    dict(row, strike=strike)
+    for row, strike in zip(MOCK_CHAIN["data"], (605, 659, 721, 735))
+]}
+
 
 class TestCalculateDte:
     def test_future_date(self):
@@ -31,7 +36,7 @@ class TestCalculateDte:
 
 class TestEstimateFromChain:
     def test_returns_pnl(self, sample_position):
-        chain = {"data": MOCK_CHAIN["data"]}
+        chain = MONITOR_CHAIN
         # Override expirDate to match chain data for strike lookup
         result = estimate_from_chain(sample_position, chain)
 
@@ -42,7 +47,7 @@ class TestEstimateFromChain:
         assert len(result["leg_details"]) == 4
 
     def test_leg_details_have_current_mid(self, sample_position):
-        chain = {"data": MOCK_CHAIN["data"]}
+        chain = MONITOR_CHAIN
         result = estimate_from_chain(sample_position, chain)
 
         for ld in result["leg_details"]:
@@ -50,6 +55,16 @@ class TestEstimateFromChain:
             assert "current_delta" in ld
             assert "bid" in ld
             assert "ask" in ld
+
+    def test_missing_strike_is_not_replaced_by_nearest(self, sample_position):
+        with pytest.raises(ValueError, match="No quote"):
+            estimate_from_chain(sample_position, MOCK_CHAIN)
+
+    def test_entry_commission_and_quantity_are_accounted_for(self, sample_position):
+        base = estimate_from_chain(sample_position, MONITOR_CHAIN)["pnl"]
+        position = dict(sample_position, commission=2.6, qty=2)
+        result = estimate_from_chain(position, MONITOR_CHAIN)
+        assert result["pnl"] == pytest.approx(base * 2 - 2.6)
 
 
 class TestEstimateFromModel:
@@ -124,12 +139,39 @@ class TestMonitorAgent:
         result = agent.run({
             "position": sample_position,
             "current_price": 690.0,
-            "chain": MOCK_CHAIN,
+            "chain": MONITOR_CHAIN,
         })
 
         assert result.success
         assert result.data["valuation"]["data_source"] == "LIVE_CHAIN"
         assert "alerts" in result.data
+
+    def test_incomplete_chain_falls_back_to_model(self, sample_position):
+        result = MonitorAgent().run({
+            "position": sample_position,
+            "current_price": 690.0,
+            "chain": MOCK_CHAIN,
+        })
+        assert result.data["valuation"]["data_source"] == "ESTIMATED"
+
+    def test_other_expiry_falls_back_to_model(self, sample_position):
+        chain = {"data": [
+            dict(row, expirDate="2026-03-20") for row in MONITOR_CHAIN["data"]
+        ]}
+        result = MonitorAgent().run({
+            "position": sample_position, "current_price": 690.0, "chain": chain,
+        })
+        assert result.data["valuation"]["data_source"] == "ESTIMATED"
+
+    @pytest.mark.parametrize("bid", [None, -1, float("nan")])
+    def test_invalid_quote_falls_back_to_model(self, sample_position, bid):
+        rows = [dict(row) for row in MONITOR_CHAIN["data"]]
+        rows[0]["putBidPrice"] = bid
+        result = MonitorAgent().run({
+            "position": sample_position, "current_price": 690.0,
+            "chain": {"data": rows},
+        })
+        assert result.data["valuation"]["data_source"] == "ESTIMATED"
 
     def test_run_without_chain(self, sample_position):
         agent = MonitorAgent()

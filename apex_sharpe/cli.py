@@ -143,8 +143,10 @@ def main() -> None:
                 ib_client = IBClient(config.ib)
                 ib_client.connect()
             except Exception as exc:
-                print(f"[IB] Connection failed: {exc} — falling back to simulated execution")
-                ib_client = None
+                print(f"[IB] Connection failed: {exc} — trading aborted")
+                if ib_client is not None:
+                    ib_client.disconnect()
+                return
         pipeline = ICPipeline(config, orats, state, ib_client=ib_client)
         try:
             if mode == "scan":

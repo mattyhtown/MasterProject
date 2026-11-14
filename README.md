@@ -81,7 +81,7 @@ cp .env.example .env
 pip install -r requirements.txt
 
 # Verify
-python -m pytest apex_sharpe/tests/ -v
+python -m pytest -q
 ```
 
 Configuration reads the repository-root `.env` (or the legacy
@@ -143,6 +143,8 @@ For standalone containers, pass `--env-file .env` to `docker run`.
 
 Failed or offline IB closes leave positions open for retry. Expired positions
 require settlement reconciliation rather than an estimated zero-P&L close.
+Partial fills or unconfirmed cancellations require broker reconciliation before
+retry; confirmed partial closes retain only the remaining quantity.
 
 ## Stack
 

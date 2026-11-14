@@ -371,7 +371,8 @@ class IBExecutorAgent(BaseAgent):
             timeout=self.config.order_timeout,
         )
 
-        if result["status"] == "Filled":
+        filled_qty = result.get("filled_qty", qty if result["status"] == "Filled" else 0)
+        if result["status"] == "Filled" or filled_qty > 0:
             actual_price = abs(result["avg_price"])
             total_commission = sum(f.get("commission", 0) for f in result["fills"])
 
@@ -403,7 +404,7 @@ class IBExecutorAgent(BaseAgent):
                 "execution_method": "IB",
                 "ib_order_id": result["order_id"],
                 "ib_perm_id": result["perm_id"],
-                "qty": qty,
+                "qty": filled_qty,
             }
 
             if is_credit:
@@ -413,11 +414,14 @@ class IBExecutorAgent(BaseAgent):
 
             # Merge structure-specific metadata
             position.update(trade_meta)
+            if result["status"] != "Filled":
+                position["open_reconciliation_required"] = True
+                position["open_error"] = f"Partial fill: {result['status']}"
 
             ptype = "credit" if is_credit else "debit"
             print(f"  {C.GREEN}FILLED{C.RESET} {structure} — {ptype} "
                   f"${actual_price:.2f}  commission ${total_commission:.2f}")
-            return position, None
+            return position, position.get("open_error")
 
         elif result["status"] == "CANCELLED_TIMEOUT":
             return None, f"Timeout after {self.config.order_timeout}s — {symbol} {structure}"
@@ -484,11 +488,15 @@ class IBExecutorAgent(BaseAgent):
 
             print(f"  Placing order: {cand['symbol']} IC "
                   f"credit ${limit_price:.2f}...")
-            position, err = self._execute_and_build_position(
-                ib_legs, combo_action, limit_price,
-                IRON_CONDOR, cand["symbol"], cand["expiration"],
-                cand["stock_price"], 1, trade_meta,
-            )
+            try:
+                position, err = self._execute_and_build_position(
+                    ib_legs, combo_action, limit_price,
+                    IRON_CONDOR, cand["symbol"], cand["expiration"],
+                    cand["stock_price"], 1, trade_meta,
+                )
+            except Exception as exc:
+                errors.append(f"{cand['symbol']}: {exc}")
+                continue
             if position:
                 credit = position["entry_credit"]
                 position["max_profit"] = round(credit * 100 - position["commission"], 2)
@@ -655,10 +663,12 @@ class IBExecutorAgent(BaseAgent):
             if is_credit_trade:
                 realized_pnl = round(
                     (position["entry_credit"] - exit_price) * 100 * qty
+                    + position.get("partial_realized_pnl", 0)
                     - position.get("commission", 0) - total_commission, 2)
             else:
                 realized_pnl = round(
                     (exit_price - position.get("entry_cost", 0)) * 100 * qty
+                    + position.get("partial_realized_pnl", 0)
                     - position.get("commission", 0) - total_commission, 2)
 
             updated = dict(position)
@@ -678,7 +688,22 @@ class IBExecutorAgent(BaseAgent):
         else:
             msg = f"Close failed: {result['status']}"
             print(f"  {C.RED}{msg}{C.RESET}")
-            return self._result(success=False, errors=[msg])
+            updated = dict(position)
+            filled_qty = result.get("filled_qty", 0)
+            if filled_qty > 0:
+                exit_price = abs(result["avg_price"])
+                commission = sum(f.get("commission", 0) for f in result.get("fills", []))
+                pnl = ((position["entry_credit"] - exit_price) if is_credit_trade
+                       else (exit_price - position.get("entry_cost", 0)))
+                updated["qty"] = max(0, qty - filled_qty)
+                updated["partial_realized_pnl"] = round(
+                    position.get("partial_realized_pnl", 0)
+                    + pnl * 100 * filled_qty - commission, 2
+                )
+            if (filled_qty > 0 or result.get("fills")
+                    or not result.get("cancellation_confirmed", True)):
+                updated["close_reconciliation_required"] = True
+            return self._result(success=False, data={"position": updated}, errors=[msg])
 
     def run_close(self, position: Dict, exit_reason: str,
                   exit_pnl: float = 0.0) -> Dict:
@@ -687,17 +712,22 @@ class IBExecutorAgent(BaseAgent):
         Returns updated position dict (not AgentResult).
         Leaves the position open if IB is offline or the close is not filled.
         """
+        if position.get("close_reconciliation_required") or position.get("open_reconciliation_required"):
+            return dict(position, close_error="Broker reconciliation required before retry")
         if not self.ib.is_connected:
             updated = dict(position)
             updated["close_error"] = "IB offline — close not executed"
             print(f"\n{C.BOLD}[IBExecutor]{C.RESET} Close deferred for {position['id']} — IB offline")
             return updated
 
-        result = self._run_close(position, exit_reason)
+        try:
+            result = self._run_close(position, exit_reason)
+        except Exception as exc:
+            return dict(position, close_error=str(exc), close_reconciliation_required=True)
         if result.success:
             return result.data["position"]
         else:
-            updated = dict(position)
+            updated = result.data.get("position", dict(position))
             updated["close_error"] = "; ".join(result.errors)
             print(f"  {C.YELLOW}IB close failed — position remains open{C.RESET}")
             return updated

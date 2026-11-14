@@ -10,6 +10,7 @@ Black-Scholes Greeks when financepy is available.
 
 from datetime import date, datetime
 from decimal import Decimal
+from math import isfinite
 from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
@@ -35,7 +36,10 @@ def calculate_dte(expiration_str: str) -> int:
 
 def estimate_from_chain(position: Dict, chain_data: Dict) -> Dict:
     """Value a position using live chain data."""
-    strikes_data = chain_data["data"]
+    strikes_data = [
+        row for row in chain_data["data"]
+        if row.get("expirDate") == position["expiration"]
+    ]
     strike_lookup: Dict[float, Dict] = {s["strike"]: s for s in strikes_data}
 
     current_value = 0.0
@@ -45,23 +49,27 @@ def estimate_from_chain(position: Dict, chain_data: Dict) -> Dict:
         strike = leg["strike"]
         chain_strike = strike_lookup.get(strike)
         if not chain_strike:
-            chain_strike = min(strikes_data, key=lambda s: abs(s["strike"] - strike))
+            raise ValueError(f"No quote for {position['expiration']} strike {strike}")
 
         if leg["type"] == "PUT":
-            bid = chain_strike.get("putBidPrice", 0)
-            ask = chain_strike.get("putAskPrice", 0)
-            mid = (bid + ask) / 2
+            bid = chain_strike.get("putBidPrice")
+            ask = chain_strike.get("putAskPrice")
             delta = chain_strike.get("delta", 0.5) - 1
         else:
-            bid = chain_strike.get("callBidPrice", 0)
-            ask = chain_strike.get("callAskPrice", 0)
-            mid = (bid + ask) / 2
+            bid = chain_strike.get("callBidPrice")
+            ask = chain_strike.get("callAskPrice")
             delta = chain_strike.get("delta", 0.5)
 
+        if (bid is None or ask is None or not isfinite(bid) or not isfinite(ask)
+                or bid < 0 or ask < bid):
+            raise ValueError(f"Invalid quote for strike {strike}")
+        mid = (bid + ask) / 2
+
+        multiplier = 100 * position.get("qty", 1) * leg.get("ratio", 1)
         if leg["action"] == "BUY":
-            current_value += mid * 100
+            current_value += mid * multiplier
         else:
-            current_value -= mid * 100
+            current_value -= mid * multiplier
 
         leg_details.append({
             "strike": strike,
@@ -74,8 +82,8 @@ def estimate_from_chain(position: Dict, chain_data: Dict) -> Dict:
             "ask": round(ask, 2),
         })
 
-    entry_credit = position["entry_credit"] * 100
-    pnl = entry_credit + current_value
+    entry_credit = position["entry_credit"] * 100 * position.get("qty", 1)
+    pnl = entry_credit + current_value - position.get("commission", 0)
 
     return {
         "pnl": round(pnl, 2),
@@ -93,7 +101,8 @@ def estimate_from_model(position: Dict, current_price: float) -> Dict:
         - datetime.strptime(position["entry_date"], "%Y-%m-%d").date()
     ).days
     time_passed_pct = max(0, 1 - dte / entry_dte) if entry_dte > 0 else 0
-    theta_profit = position["entry_credit"] * 100 * time_passed_pct * 0.6
+    quantity = position.get("qty", 1)
+    theta_profit = position["entry_credit"] * 100 * quantity * time_passed_pct * 0.6
 
     lower_be = position["breakeven_lower"]
     upper_be = position["breakeven_upper"]
@@ -103,7 +112,7 @@ def estimate_from_model(position: Dict, current_price: float) -> Dict:
     elif current_price > upper_be:
         price_impact = -(current_price - upper_be) * 50
 
-    pnl = theta_profit + price_impact
+    pnl = theta_profit + price_impact * quantity - position.get("commission", 0)
     pnl = max(-position["max_loss"], min(position["max_profit"], pnl))
 
     return {
@@ -127,7 +136,7 @@ def generate_alerts(position: Dict, current_price: float, valuation: Dict,
             "level": "ACTION",
             "message": (
                 f"PROFIT TARGET: P&L ${valuation['pnl']:.0f} >= "
-                f"50% max profit (${position['max_profit'] * cfg.profit_target_pct:.0f})"
+                f"{cfg.profit_target_pct:.0%} max profit (${position['max_profit'] * cfg.profit_target_pct:.0f})"
             ),
             "action": "CLOSE POSITION - Take profit",
         })
@@ -312,7 +321,10 @@ class MonitorAgent(BaseAgent):
 
         # Valuate
         if chain and chain.get("data"):
-            valuation = estimate_from_chain(pos, chain)
+            try:
+                valuation = estimate_from_chain(pos, chain)
+            except ValueError:
+                valuation = estimate_from_model(pos, current_price)
         else:
             valuation = estimate_from_model(pos, current_price)
 

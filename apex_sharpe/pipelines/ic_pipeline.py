@@ -33,7 +33,9 @@ class ICPipeline:
         self.risk = RiskAgent(config.risk)
 
         # Use IB executor when enabled and connected
-        if config.ib.enabled and ib_client is not None:
+        if config.ib.enabled:
+            if ib_client is None:
+                raise ConnectionError("IB execution enabled but no IB client is available")
             from ..agents.ib_executor import IBExecutorAgent
             self.executor = IBExecutorAgent(ib_client, config.executor, config.monitor)
             self._ib_mode = True
@@ -116,6 +118,10 @@ class ICPipeline:
         closed_positions: List[Dict] = []
 
         for pos in open_positions:
+            if not self._ib_mode and pos.get("execution_method", "").startswith("IB"):
+                pos["close_error"] = "Broker-backed position requires IB monitoring"
+                print(f"\n  {pos['id']}: IB unavailable — simulated close prohibited")
+                continue
             symbol = pos["symbol"]
             expiry = pos["expiration"]
             dte = calculate_dte(expiry)
@@ -171,6 +177,7 @@ class ICPipeline:
                         break
                 if updated.get("status") == "CLOSED":
                     closed_positions.append(updated)
+                self.state.save_positions(positions)
 
         # Save + report
         self.state.save_positions(positions)

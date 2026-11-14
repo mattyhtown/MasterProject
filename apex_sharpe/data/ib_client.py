@@ -482,6 +482,14 @@ class IBClient:
             self._ib.sleep(1)
             elapsed += 1
 
+        timed_out = not trade.isDone()
+        if timed_out:
+            self._ib.cancelOrder(order)
+            for _ in range(5):
+                if trade.isDone():
+                    break
+                self._ib.sleep(1)
+
         # Build result
         fills = []
         for fill in trade.fills:
@@ -496,9 +504,7 @@ class IBClient:
 
         status = trade.orderStatus.status if trade.orderStatus else "Unknown"
 
-        # Cancel if not filled
-        if not trade.isDone():
-            self._ib.cancelOrder(order)
+        if timed_out and status != "Filled":
             status = "CANCELLED_TIMEOUT"
 
         return {
@@ -510,6 +516,7 @@ class IBClient:
             if trade.orderStatus else 0,
             "filled_qty": trade.orderStatus.filled
             if trade.orderStatus else 0,
+            "cancellation_confirmed": trade.isDone(),
         }
 
     def what_if_order(self, legs: List[Dict], action: str = "SELL",

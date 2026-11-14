@@ -7,6 +7,7 @@ No real trading, market data, or account information is used.
 
 import math
 import os
+import sys
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -338,6 +339,12 @@ class TestSecurityAgent:
 class TestInfraAgent:
     """NOTE: ALL DATA IS SYNTHETIC."""
 
+    @pytest.fixture(autouse=True)
+    def mock_market_data(self, monkeypatch):
+        yf = MagicMock()
+        yf.Ticker.return_value.history.return_value = []
+        monkeypatch.setitem(sys.modules, "yfinance", yf)
+
     def setup_method(self):
         self.agent = InfraAgent()
 
@@ -365,13 +372,18 @@ class TestInfraAgent:
         assert "missing_required" in result.data
         assert "config_loads" in result.data
 
-    def test_docker_status(self):
+    @pytest.mark.parametrize("marker, env_flag, expected", [
+        (False, "0", False), (True, "0", True), (False, "1", True),
+    ])
+    def test_docker_status(self, monkeypatch, marker, env_flag, expected):
+        monkeypatch.setattr("apex_sharpe.agents.ops.infra_agent.os.path.exists", lambda path: marker)
+        monkeypatch.setenv("DOCKER_CONTAINER", env_flag)
         result = self.agent.run({"action": "docker_status"})
         assert result.success
         assert "in_docker" in result.data
         assert "platform" in result.data
         assert "python" in result.data
-        assert result.data["in_docker"] is False  # we're not in Docker
+        assert result.data["in_docker"] is expected
 
     @patch("apex_sharpe.agents.ops.infra_agent.shutil.disk_usage")
     def test_full_report(self, mock_disk):

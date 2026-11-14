@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 from apex_sharpe.config import (
     AppConfig, OratsCfg, ScannerCfg, RiskCfg,
-    ExecutorCfg, MonitorCfg, StateCfg,
+    ExecutorCfg, MonitorCfg, StateCfg, IBCfg,
 )
 from apex_sharpe.data.orats_client import ORATSClient
 from apex_sharpe.data.state import StateManager
@@ -87,6 +87,41 @@ class TestICPipelineScan:
 
 
 class TestICPipelineMonitor:
+    def test_ib_enabled_without_client_cannot_simulate(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        config = AppConfig(**{**config.__dict__, "ib": IBCfg(enabled=True)})
+        with pytest.raises(ConnectionError, match="no IB client"):
+            ICPipeline(config, mock_orats, StateManager(config.state))
+
+    def test_ib_position_cannot_close_in_simulation(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        state = StateManager(config.state)
+        state.save_positions([dict(SAMPLE_POSITION, execution_method="IB")])
+        mock_orats.summaries.return_value = {"data": [{"stockPrice": 600.0}]}
+        ICPipeline(config, mock_orats, state).run_monitor()
+        position = state.load_positions()[0]
+        assert position["status"] == "OPEN"
+        assert "realized_pnl" not in position
+        assert "IB monitoring" in position["close_error"]
+
+    def test_successful_close_saved_before_next_position_fails(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        state = StateManager(config.state)
+        state.save_positions([SAMPLE_POSITION, dict(SAMPLE_POSITION, id="second")])
+        pipeline = ICPipeline(config, mock_orats, state)
+        action_result = MagicMock()
+        action_result.data = {"valuation": {"pnl": 200}, "alerts": [
+            {"level": "ACTION", "message": "PROFIT_TARGET"},
+        ]}
+        pipeline.monitor_agent.run = MagicMock(side_effect=[
+            action_result, RuntimeError("market data failed"),
+        ])
+        with pytest.raises(RuntimeError, match="market data failed"):
+            pipeline.run_monitor()
+        positions = state.load_positions()
+        assert positions[0]["status"] == "CLOSED"
+        assert positions[1]["status"] == "OPEN"
+
     def test_expired_position_requires_reconciliation(self, mock_orats, tmp_path):
         config = _make_config(str(tmp_path))
         state = StateManager(config.state)

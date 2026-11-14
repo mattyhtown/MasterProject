@@ -431,6 +431,52 @@ class TestIBExecutorAgent:
         closed = executor.run_close(position, "PROFIT_TARGET")
         assert closed["realized_pnl"] == pytest.approx(292.8)
 
+    def test_partial_close_tracks_remaining_and_blocks_blind_retry(self, sample_position):
+        executor, client = self._make_executor()
+        client.place_combo_order.return_value = {
+            "status": "CANCELLED_TIMEOUT", "filled_qty": 1, "avg_price": 1.0,
+            "fills": [{"commission": 2.6}], "cancellation_confirmed": True,
+        }
+        position = dict(sample_position, qty=2, commission=5.2)
+        updated = executor.run_close(position, "DTE")
+        assert updated["status"] == "OPEN"
+        assert updated["qty"] == 1
+        assert updated["partial_realized_pnl"] == pytest.approx(295.4)
+        assert updated["close_reconciliation_required"]
+        executor.run_close(updated, "DTE")
+        client.place_combo_order.assert_called_once()
+
+        updated.pop("close_reconciliation_required")
+        client.place_combo_order.return_value = {
+            "status": "Filled", "filled_qty": 1, "avg_price": 1.0,
+            "fills": [{"commission": 2.6}],
+        }
+        closed = executor.run_close(updated, "DTE")
+        assert client.place_combo_order.call_args.kwargs["quantity"] == 1
+        assert closed["realized_pnl"] == pytest.approx(585.6)
+
+    def test_execution_exception_defers_close(self, sample_position):
+        executor, client = self._make_executor()
+        client.place_combo_order.side_effect = ValueError("Could not qualify all order legs")
+        updated = executor.run_close(sample_position, "DTE")
+        assert updated["status"] == "OPEN"
+        assert "qualify" in updated["close_error"]
+
+    def test_partial_open_is_not_lost(self):
+        executor, client = self._make_executor()
+        client.place_combo_order.return_value = {
+            "status": "CANCELLED_TIMEOUT", "filled_qty": 1, "avg_price": 1.0,
+            "fills": [{"commission": 1.3}], "order_id": 1, "perm_id": 1,
+        }
+        position, error = executor._execute_and_build_position(
+            [{"symbol": "SPY", "expiry": "2026-03-13", "strike": 660,
+              "right": "C", "action": "BUY"}],
+            "BUY", 1.0, "LONG_CALL", "SPY", "2026-03-13", 690, 2, {},
+        )
+        assert position["qty"] == 1
+        assert position["open_reconciliation_required"]
+        assert error is not None
+
     def test_status_action(self):
         executor, client = self._make_executor()
         # Set _ib on the mock client so status check finds it
@@ -660,14 +706,11 @@ class TestICPipelineIBIntegration:
         assert isinstance(pipeline.executor, IBExecutorAgent)
         assert pipeline._ib_mode is True
 
-    def test_simulated_executor_when_ib_enabled_no_client(self, mock_orats):
+    def test_ib_enabled_without_client_fails_closed(self, mock_orats):
         from apex_sharpe.pipelines.ic_pipeline import ICPipeline
-        from apex_sharpe.agents.executor import ExecutorAgent
         from apex_sharpe.config import AppConfig, IBCfg
 
         config = AppConfig(ib=IBCfg(enabled=True))
         state = MagicMock()
-        # No ib_client passed
-        pipeline = ICPipeline(config, mock_orats, state)
-        assert isinstance(pipeline.executor, ExecutorAgent)
-        assert pipeline._ib_mode is False
+        with pytest.raises(ConnectionError, match="no IB client"):
+            ICPipeline(config, mock_orats, state)
