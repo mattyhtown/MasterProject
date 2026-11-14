@@ -11,6 +11,8 @@ from datetime import date, datetime
 from apex_sharpe.config import ChainIngestCfg, SupabaseCfg
 from apex_sharpe.agents.chain_ingest import ChainIngestAgent
 
+pytestmark = pytest.mark.usefixtures("fixed_market_date")
+
 
 # ---------------------------------------------------------------------------
 # Mock chain data (ORATS format)

@@ -115,3 +115,37 @@ class TestRiskAgent:
         })
 
         assert len(result.data["decisions"]) == 2
+
+    def test_batch_reserves_position_slots(self, sample_candidate):
+        cfg = RiskCfg(max_positions=1, credit_width_min=0.05)
+        second = dict(sample_candidate, symbol="QQQ")
+        decisions = RiskAgent(cfg).run({
+            "candidates": [sample_candidate, second], "positions": [],
+        }).data["decisions"]
+        assert [d["decision"] for d in decisions] == ["ALLOW", "BLOCK"]
+        assert any("Position limit" in r for r in decisions[1]["reasons"])
+
+    def test_batch_reserves_portfolio_risk(self, sample_candidate):
+        cfg = RiskCfg(total_risk_pct=0.08, credit_width_min=0.05)
+        second = dict(sample_candidate, symbol="QQQ")
+        decisions = RiskAgent(cfg).run({
+            "candidates": [sample_candidate, second], "positions": [],
+        }).data["decisions"]
+        assert [d["decision"] for d in decisions] == ["ALLOW", "BLOCK"]
+        assert any("Total risk" in r for r in decisions[1]["reasons"])
+
+    def test_batch_blocks_duplicate_candidates(self, sample_candidate):
+        cfg = RiskCfg(credit_width_min=0.05)
+        decisions = RiskAgent(cfg).run({
+            "candidates": [sample_candidate, dict(sample_candidate)], "positions": [],
+        }).data["decisions"]
+        assert [d["decision"] for d in decisions] == ["ALLOW", "BLOCK"]
+        assert any("Duplicate" in r for r in decisions[1]["reasons"])
+
+    def test_blocked_candidate_does_not_reserve_capacity(self, sample_candidate):
+        cfg = RiskCfg(max_positions=1, credit_width_min=0.05)
+        bad = dict(sample_candidate, max_loss=100_000)
+        decisions = RiskAgent(cfg).run({
+            "candidates": [bad, sample_candidate], "positions": [],
+        }).data["decisions"]
+        assert [d["decision"] for d in decisions] == ["BLOCK", "ALLOW"]

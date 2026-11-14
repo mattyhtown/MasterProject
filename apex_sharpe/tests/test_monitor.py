@@ -14,6 +14,9 @@ from apex_sharpe.agents.monitor import (
 )
 from apex_sharpe.config import MonitorCfg
 from apex_sharpe.tests.conftest import MOCK_CHAIN
+import pytest
+
+pytestmark = pytest.mark.usefixtures("fixed_market_date")
 
 
 class TestCalculateDte:

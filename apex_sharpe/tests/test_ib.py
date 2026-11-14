@@ -66,6 +66,10 @@ def _mock_fill(con_id, price, qty, commission=0.65):
 class TestIBClient:
     """Test IBClient with mocked ib_async module."""
 
+    @pytest.fixture(autouse=True)
+    def mock_ib_async(self, monkeypatch):
+        monkeypatch.setattr("apex_sharpe.data.ib_client._ib_async", MagicMock())
+
     def _make_client(self, connected=True):
         """Create an IBClient with mocked internals."""
         from apex_sharpe.data.ib_client import IBClient

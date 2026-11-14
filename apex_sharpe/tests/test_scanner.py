@@ -7,6 +7,9 @@ bid/ask prices). No real API calls are made.
 
 from apex_sharpe.agents.scanner import ScannerAgent
 from apex_sharpe.config import ScannerCfg
+import pytest
+
+pytestmark = pytest.mark.usefixtures("fixed_market_date")
 
 
 class TestScannerAgent:

@@ -7,6 +7,7 @@ API calls, no real brokerage execution.
 
 import json
 import tempfile
+import pytest
 from unittest.mock import MagicMock, patch
 
 from apex_sharpe.config import (
@@ -20,6 +21,8 @@ from apex_sharpe.tests.conftest import (
     MOCK_IV_RANK, MOCK_SUMMARIES, MOCK_EXPIRATIONS, MOCK_CHAIN,
     SAMPLE_POSITION,
 )
+
+pytestmark = pytest.mark.usefixtures("fixed_market_date")
 
 
 def _make_config(tmpdir):

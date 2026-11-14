@@ -12,6 +12,7 @@ actual ORATS API responses or historical market data.
 """
 
 import pytest
+from datetime import date
 from unittest.mock import MagicMock
 
 
@@ -139,6 +140,18 @@ MOCK_0DTE_SUMMARIES = {
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+@pytest.fixture
+def fixed_market_date(monkeypatch):
+    """Keep dated option fixtures valid regardless of the test execution date."""
+    class MarketDate(date):
+        @classmethod
+        def today(cls):
+            return cls(2026, 2, 16)
+
+    for module in ("scanner", "monitor", "executor", "chain_ingest"):
+        monkeypatch.setattr(f"apex_sharpe.agents.{module}.date", MarketDate)
+
 
 @pytest.fixture
 def sample_position():

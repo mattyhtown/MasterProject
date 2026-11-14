@@ -123,6 +123,14 @@ class RiskAgent(BaseAgent):
                 "decision": decision,
                 "reasons": reasons,
             })
+            if not blocked:
+                open_count += 1
+                total_existing_risk = new_total_risk
+                open_positions.append({
+                    "id": f"pending-{cand['symbol']}-{cand['expiration']}",
+                    "symbol": cand["symbol"],
+                    "expiration": cand["expiration"],
+                })
 
         return self._result(
             success=True,
