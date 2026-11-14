@@ -322,10 +322,13 @@ class IBExecutorAgent(BaseAgent):
     def _check_margin(self, ib_legs: List[Dict], combo_action: str,
                       limit_price: float) -> Optional[str]:
         """Run margin preview. Returns error message or None if OK."""
-        margin = self.ib.what_if_order(
-            ib_legs, action=combo_action, quantity=1,
-            limit_price=limit_price,
-        )
+        try:
+            margin = self.ib.what_if_order(
+                ib_legs, action=combo_action, quantity=1,
+                limit_price=limit_price,
+            )
+        except Exception as exc:
+            return f"Margin preview failed — BLOCKED: {exc}"
         if not margin:
             return None  # No margin data — allow (IB sometimes can't preview)
 
@@ -372,9 +375,10 @@ class IBExecutorAgent(BaseAgent):
         )
 
         filled_qty = result.get("filled_qty", qty if result["status"] == "Filled" else 0)
-        if result["status"] == "Filled" or filled_qty > 0:
-            actual_price = abs(result["avg_price"])
-            total_commission = sum(f.get("commission", 0) for f in result["fills"])
+        unresolved = not result.get("cancellation_confirmed", True)
+        if result["status"] == "Filled" or filled_qty > 0 or unresolved:
+            actual_price = abs(result["avg_price"]) if filled_qty > 0 else limit_price
+            total_commission = sum(f.get("commission", 0) for f in result.get("fills", []))
 
             # Build normalized leg list for position storage
             pos_legs = []
@@ -404,7 +408,8 @@ class IBExecutorAgent(BaseAgent):
                 "execution_method": "IB",
                 "ib_order_id": result["order_id"],
                 "ib_perm_id": result["perm_id"],
-                "qty": filled_qty,
+                "qty": filled_qty if filled_qty > 0 else qty,
+                "filled_qty": filled_qty,
             }
 
             if is_credit:
@@ -416,7 +421,7 @@ class IBExecutorAgent(BaseAgent):
             position.update(trade_meta)
             if result["status"] != "Filled":
                 position["open_reconciliation_required"] = True
-                position["open_error"] = f"Partial fill: {result['status']}"
+                position["open_error"] = f"Unresolved opening order: {result['status']}"
 
             ptype = "credit" if is_credit else "debit"
             print(f"  {C.GREEN}FILLED{C.RESET} {structure} — {ptype} "
@@ -508,6 +513,8 @@ class IBExecutorAgent(BaseAgent):
                 limit_hit = pos_count >= self.config.max_positions
             if err:
                 errors.append(err)
+            if position and position.get("open_reconciliation_required"):
+                break
 
         return self._result(
             success=len(errors) == 0,
@@ -625,6 +632,11 @@ class IBExecutorAgent(BaseAgent):
 
     def _run_close(self, position: Dict, exit_reason: str) -> AgentResult:
         """Close a position via IB (works for all structures)."""
+        if position.get("close_reconciliation_required") or position.get("open_reconciliation_required"):
+            return self._result(
+                success=False, data={"position": dict(position)},
+                errors=["Broker reconciliation required before retry"],
+            )
         ib_legs = []
         for leg in position["legs"]:
             # Reverse the action to close

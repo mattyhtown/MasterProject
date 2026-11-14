@@ -57,6 +57,12 @@ class ICPipeline:
         print("=" * 80)
 
         positions = self.state.load_positions()
+        if any(
+            p.get("open_reconciliation_required") or p.get("close_reconciliation_required")
+            for p in positions if p.get("status") == "OPEN"
+        ):
+            print("[Pipeline] Broker reconciliation required — new trades blocked")
+            return
 
         # 1. Scan
         scan_result = self.scanner.run({"orats": self.orats})

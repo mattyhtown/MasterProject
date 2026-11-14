@@ -56,6 +56,14 @@ def _make_config(tmpdir):
 
 
 class TestICPipelineScan:
+    def test_unresolved_broker_order_blocks_new_scan(self, mock_orats, tmp_path):
+        config = _make_config(str(tmp_path))
+        state = StateManager(config.state)
+        state.save_positions([dict(SAMPLE_POSITION, open_reconciliation_required=True)])
+        ICPipeline(config, mock_orats, state).run_scan()
+        mock_orats.iv_rank.assert_not_called()
+        assert len(state.load_positions()) == 1
+
     def test_scan_end_to_end(self, mock_orats, tmp_path):
         config = _make_config(str(tmp_path))
         state = StateManager(config.state)

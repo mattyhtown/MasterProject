@@ -477,6 +477,47 @@ class TestIBExecutorAgent:
         assert position["open_reconciliation_required"]
         assert error is not None
 
+    def test_unconfirmed_open_reserves_potential_exposure(self, sample_candidate):
+        executor, client = self._make_executor()
+        client.what_if_order.return_value = None
+        client.place_combo_order.return_value = {
+            "status": "CANCELLED_TIMEOUT", "filled_qty": 0, "avg_price": 0.0,
+            "fills": [], "order_id": 1, "perm_id": 1,
+            "cancellation_confirmed": False,
+        }
+        decision = {"candidate": sample_candidate, "decision": "ALLOW"}
+        result = executor.run({"decisions": [decision, decision]})
+        position = result.data["new_positions"][0]
+        assert position["status"] == "OPEN"
+        assert position["qty"] == 1
+        assert position["filled_qty"] == 0
+        assert position["ib_order_id"] == 1
+        assert position["open_reconciliation_required"]
+        client.place_combo_order.assert_called_once()
+
+    def test_margin_preview_failure_retains_prior_opens(self, sample_candidate):
+        executor, client = self._make_executor()
+        client.what_if_order.side_effect = [
+            None, ValueError("Could not qualify all order legs"),
+        ]
+        client.place_combo_order.return_value = {
+            "status": "Filled", "filled_qty": 1, "avg_price": 3.0,
+            "fills": [], "order_id": 1, "perm_id": 1,
+        }
+        decision = {"candidate": sample_candidate, "decision": "ALLOW"}
+        result = executor.run({"decisions": [decision, decision]})
+        assert len(result.data["new_positions"]) == 1
+        assert any("Margin preview failed" in e for e in result.errors)
+
+    def test_public_close_api_respects_reconciliation_flag(self, sample_position):
+        executor, client = self._make_executor()
+        result = executor.run({
+            "action": "close",
+            "position": dict(sample_position, close_reconciliation_required=True),
+        })
+        assert not result.success
+        client.place_combo_order.assert_not_called()
+
     def test_status_action(self):
         executor, client = self._make_executor()
         # Set _ib on the mock client so status check finds it
