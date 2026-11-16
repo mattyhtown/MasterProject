@@ -48,6 +48,7 @@ Usage:
     python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
     python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
     python -m apex_sharpe uw-flow         — Unusual Whales flow alerts (research/paper only)
+    python -m apex_sharpe 0dte-find       — Rank same-day SPX credit spreads / iron condors
 """
 
 import sys
@@ -119,6 +120,7 @@ Interactive Brokers:
 
 Research data (paper only):
   uw-flow         Unusual Whales flow alerts [ticker] [limit]
+  0dte-find       Rank same-day credit spreads / iron condors [ticker] [--chart PATH]
 """
 
 
@@ -1086,6 +1088,44 @@ def main() -> None:
                   f" {str(prem):>12}"
                   f" {str(size):>8}"
                   f" {chain}")
+
+    elif mode in ("0dte-find", "0dte_find"):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from .agents import zero_dte_finder as finder
+        from .data.unusual_whales import UnusualWhalesClient, UnusualWhalesError
+
+        args = sys.argv[2:]
+        chart_path = ""
+        if "--chart" in args:
+            idx = args.index("--chart")
+            chart_path = args[idx + 1] if idx + 1 < len(args) else "0dte_find.png"
+            args = args[:idx] + args[idx + 2:]
+        ticker = args[0].upper() if args else "SPX"
+        now = datetime.now(ZoneInfo("America/New_York"))
+        expiry = now.strftime("%Y-%m-%d")
+        print(f"  0DTE finder — {ticker} expiring {expiry}"
+              f" (as of {now:%H:%M} ET) — research only, no orders")
+        try:
+            uw = UnusualWhalesClient(config.unusual_whales)
+            rows = uw.option_contracts(ticker, expiry)
+        except UnusualWhalesError as exc:
+            print(f"  [ERROR] {exc}")
+            sys.exit(1)
+        if not rows:
+            print(f"  No {ticker} contracts expire today ({expiry}).")
+            sys.exit(0)
+        result = finder.scan(rows, expiry=expiry)
+        print(finder.format_report(result))
+        if chart_path and result["forward"] is not None:
+            try:
+                finder.save_chart(
+                    result, chart_path,
+                    title=f"{ticker} 0DTE volume by strike — {expiry} {now:%H:%M} ET")
+                print(f"\n  Chart saved to {chart_path}")
+            except ImportError:
+                print("\n  Chart skipped: matplotlib is not installed")
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

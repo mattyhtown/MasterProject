@@ -97,3 +97,20 @@ class UnusualWhalesClient:
     def option_trades(self, **params: Any) -> Dict[str, Any]:
         """GET /api/option-trades with query-param passthrough."""
         return self.get("/api/option-trades", params)
+
+    def option_contracts(self, ticker: str, expiry: str, page_size: int = 500,
+                         max_pages: int = 10) -> list:
+        """All option contracts for one expiry, following pagination."""
+        rows: list = []
+        for page in range(max_pages):
+            payload = self.get(
+                f"/api/stock/{ticker}/option-contracts",
+                {"expiry": expiry, "limit": page_size, "page": page or None},
+            )
+            batch = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(batch, list):
+                break
+            rows.extend(batch)
+            if len(batch) < page_size:
+                break
+        return rows
