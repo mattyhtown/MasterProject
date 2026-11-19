@@ -48,6 +48,8 @@ Usage:
     python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
     python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
     python -m apex_sharpe uw-flow         — Unusual Whales flow alerts (research/paper only)
+    python -m apex_sharpe webhook-serve   — Start inbound webhook HTTP server
+    python -m apex_sharpe webhook-test    — Send test outbound webhook notification
 """
 
 import sys
@@ -119,6 +121,10 @@ Interactive Brokers:
 
 Research data (paper only):
   uw-flow         Unusual Whales flow alerts [ticker] [limit]
+
+Webhooks:
+  webhook-serve   Start inbound webhook HTTP server [host] [port]
+  webhook-test    Send test outbound webhook notification [event] [message]
 """
 
 
@@ -1086,6 +1092,64 @@ def main() -> None:
                   f" {str(prem):>12}"
                   f" {str(size):>8}"
                   f" {chain}")
+
+    elif mode in ("webhook-serve", "webhook_serve"):
+        from .config import WebhookCfg
+        from .webhooks import WebhookClient, WebhookServer
+
+        host = sys.argv[2] if len(sys.argv) > 2 else config.webhook.host
+        port = int(sys.argv[3]) if len(sys.argv) > 3 else config.webhook.port
+        wh_cfg = WebhookCfg(
+            urls=config.webhook.urls,
+            secret=config.webhook.secret,
+            timeout=config.webhook.timeout,
+            format=config.webhook.format,
+            inbound_secret=config.webhook.inbound_secret,
+            github_secret=config.webhook.github_secret,
+            host=host,
+            port=port,
+            max_body_bytes=config.webhook.max_body_bytes,
+        )
+        outbound = WebhookClient(wh_cfg) if wh_cfg.urls else None
+        server = WebhookServer(config=wh_cfg, state=state, outbound=outbound)
+        bound_host, bound_port = server.server_address
+        print(f"  APEX-SHARPE Webhook Server listening on http://{bound_host}:{bound_port}")
+        print("  Endpoints: GET /health, POST /webhook, POST /webhooks/<github|tradingview|supabase|ops>")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n  Webhook server stopped.")
+            server.shutdown()
+
+    elif mode in ("webhook-test", "webhook_test"):
+        from .webhooks import WebhookClient, WebhookDeliveryError
+
+        event = sys.argv[2] if len(sys.argv) > 2 else "test.ping"
+        message = sys.argv[3] if len(sys.argv) > 3 else "APEX-SHARPE webhook test notification"
+        try:
+            client = WebhookClient(config.webhook)
+        except WebhookDeliveryError as exc:
+            print(f"  [ERROR] {exc}")
+            sys.exit(1)
+        if not client.enabled:
+            print("  [ERROR] WEBHOOK_URL is not set. Add it to .env or export WEBHOOK_URL.")
+            sys.exit(1)
+        results = client.send(
+            event=event,
+            title="APEX-SHARPE Webhook Test",
+            message=message,
+            severity="INFO",
+            data={"source": "cli"},
+        )
+        failed = 0
+        for res in results:
+            if res.ok:
+                print(f"  [OK] {res.url} -> HTTP {res.status_code}")
+            else:
+                failed += 1
+                print(f"  [FAIL] {res.url} -> {res.error}")
+        if failed:
+            sys.exit(1)
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

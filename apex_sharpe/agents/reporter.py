@@ -1,28 +1,84 @@
 """
-ReporterAgent — terminal output and macOS notifications.
+ReporterAgent — terminal output, macOS notifications, and outbound webhooks.
 
 Extracted from trading_pipeline.py.
 """
 
+import os
 import subprocess
+import sys
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
 from .monitor import calculate_dte
+from ..config import WebhookCfg, _load_env
 from ..types import AgentResult, C
+from ..webhooks.outbound import WebhookClient
 
 
-def send_notification(title: str, message: str, subtitle: str = "", sound: bool = True) -> None:
-    title = title.replace('"', '\\"')
-    message = message.replace('"', '\\"')
-    subtitle = subtitle.replace('"', '\\"')
-    sound_line = 'sound name "Glass"' if sound else ""
-    script = f'display notification "{message}" with title "{title}" subtitle "{subtitle}" {sound_line}'
+def _env_webhook_client() -> Optional[WebhookClient]:
+    """Build a WebhookClient from environment if WEBHOOK_URL is configured."""
+    if not os.environ.get("WEBHOOK_URL"):
+        _load_env()
+    raw_urls = os.environ.get("WEBHOOK_URL", "")
+    urls = tuple(u.strip() for u in raw_urls.split(",") if u.strip())
+    if not urls:
+        return None
     try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
-    except Exception as exc:
-        print(f"  [WARN] Notification failed: {exc}")
+        timeout = int(os.environ.get("WEBHOOK_TIMEOUT", "10"))
+    except ValueError:
+        timeout = 10
+    cfg = WebhookCfg(
+        urls=urls,
+        secret=os.environ.get("WEBHOOK_SECRET", ""),
+        timeout=timeout,
+        format=os.environ.get("WEBHOOK_FORMAT", "auto"),
+    )
+    return WebhookClient(cfg)
+
+
+def send_notification(
+    title: str,
+    message: str,
+    subtitle: str = "",
+    sound: bool = True,
+    severity: str = "INFO",
+    event: str = "notification",
+    data: Optional[Dict[str, Any]] = None,
+    webhook_client: Optional[WebhookClient] = None,
+) -> None:
+    if sys.platform == "darwin":
+        safe_title = title.replace('"', '\\"')
+        safe_message = message.replace('"', '\\"')
+        safe_subtitle = subtitle.replace('"', '\\"')
+        sound_line = 'sound name "Glass"' if sound else ""
+        script = f'display notification "{safe_message}" with title "{safe_title}" subtitle "{safe_subtitle}" {sound_line}'
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        except Exception as exc:
+            print(f"  [WARN] Notification failed: {exc}")
+
+    client = webhook_client
+    if client is None:
+        try:
+            client = _env_webhook_client()
+        except Exception as exc:
+            print(f"  [WARN] Webhook config error: {exc}")
+            client = None
+
+    if client is not None and client.enabled:
+        results = client.send(
+            event=event,
+            title=title,
+            message=message,
+            subtitle=subtitle,
+            severity=severity,
+            data=data,
+        )
+        for res in results:
+            if not res.ok:
+                print(f"  [WARN] Webhook delivery failed ({res.url}): {res.error}")
 
 
 class ReporterAgent(BaseAgent):
@@ -76,6 +132,9 @@ class ReporterAgent(BaseAgent):
                 title="APEX-SHARPE: New Position",
                 subtitle=f"{len(new_positions)} trade(s) opened",
                 message=f"{new_positions[0]['id']} — credit ${new_positions[0]['entry_credit']:.2f}",
+                severity="OK",
+                event="trade.open",
+                data={"count": len(new_positions), "position_id": new_positions[0]["id"]},
             )
 
     @staticmethod
@@ -153,10 +212,16 @@ class ReporterAgent(BaseAgent):
                 title="APEX-SHARPE: ACTION REQUIRED",
                 subtitle=f"{len(action_alerts)} position(s) need attention",
                 message=action_alerts[0][:200],
+                severity="ACTION",
+                event="monitor.action",
+                data={"action_count": len(action_alerts), "total_pnl": round(total_pnl, 2)},
             )
         elif warning_alerts:
             send_notification(
                 title="APEX-SHARPE: Warning",
                 subtitle=f"{len(warning_alerts)} warning(s)",
                 message=warning_alerts[0][:200],
+                severity="WARNING",
+                event="monitor.warning",
+                data={"warning_count": len(warning_alerts), "total_pnl": round(total_pnl, 2)},
             )
