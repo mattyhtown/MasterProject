@@ -8,6 +8,7 @@ import io
 import json
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from unittest.mock import MagicMock, patch
 
@@ -186,7 +187,10 @@ class TestWebhookDispatcher:
 
         assert len(results) == 3
         assert all(r.success and r.status_code == 204 for r in results)
-        generic_call = [c for c in captured if "example.com" in c["url"]][0]
+        generic_call = [
+            c for c in captured
+            if urllib.parse.urlparse(c["url"]).hostname == "example.com"
+        ][0]
         sig = generic_call["headers"]["x-apex-signature-256"]
         assert verify_signature(generic_call["body"], sig, "shared-hmac-secret")
 
@@ -439,7 +443,7 @@ class TestWebhookServer:
         dispatched_events = []
 
         def fake_urlopen(req, timeout=None):
-            if "example.com" in req.full_url:
+            if urllib.parse.urlparse(req.full_url).hostname == "example.com":
                 dispatched_events.append(json.loads(req.data.decode("utf-8")))
                 return _mock_urlopen(200)
             raise AssertionError(f"Unexpected URL {req.full_url}")
@@ -449,7 +453,7 @@ class TestWebhookServer:
 
         def selective_urlopen(req, timeout=None):
             url = req.full_url if hasattr(req, "full_url") else str(req)
-            if "127.0.0.1" in url:
+            if urllib.parse.urlparse(url).hostname == "127.0.0.1":
                 return orig_urlopen(req, timeout=timeout)
             return fake_urlopen(req, timeout=timeout)
 
