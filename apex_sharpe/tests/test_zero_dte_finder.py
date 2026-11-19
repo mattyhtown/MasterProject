@@ -5,9 +5,9 @@ import pytest
 from apex_sharpe.agents import zero_dte_finder as f
 
 
-def _row(right, strike, bid, ask, delta, volume=100, expiry="261116"):
+def _row(right, strike, bid, ask, delta, volume=100, expiry="261116", root="SPXW"):
     return {
-        "option_symbol": f"SPXW{expiry}{right}{int(strike * 1000):08d}",
+        "option_symbol": f"{root}{expiry}{right}{int(strike * 1000):08d}",
         "nbbo_bid": str(bid), "nbbo_ask": str(ask), "delta": delta,
         "implied_volatility": "0.2", "volume": volume, "open_interest": 10,
     }
@@ -80,3 +80,32 @@ def test_quotes_without_bids_say_market_closed():
     report = f.format_report(f.scan(closed, expiry="2026-11-16"))
     assert "2 contracts but none has both a bid and an ask" in report
     assert "market is probably closed" in report
+
+
+def test_scan_never_mixes_am_and_pm_settled_roots():
+    # Same date, same strikes: AM-settled SPX quotes must not pair with SPXW.
+    am = [_row("P", 6975, 50, 51, -0.15, root="SPX"),
+          _row("P", 6950, 0.01, 0.02, -0.05, root="SPX")]
+    result = f.scan(CHAIN + am, expiry="2026-11-16", widths=(25,))
+    assert result["root"] == "SPXW"
+    assert all(q.root == "SPXW" for q in result["quotes"])
+    s = result["put_spreads"][0]
+    assert s.credit == pytest.approx(1.4)
+
+
+def test_pick_root_falls_back_to_most_common():
+    quotes = f.parse_contracts([_row("C", 1, 1, 1, 0.5, root="SPY"),
+                                _row("P", 1, 1, 1, -0.5, root="SPY"),
+                                _row("C", 1, 1, 1, 0.5, root="XYZ")])
+    assert f.pick_root(quotes) == "SPY"
+
+
+def test_spreads_still_shown_without_forward():
+    # Only puts are quoted: no parity pair, so no forward, but a valid spread.
+    puts_only = [_row("P", 6975, 2.0, 2.2, -0.15), _row("P", 6950, 0.5, 0.6, -0.05)]
+    result = f.scan(puts_only, expiry="2026-11-16", widths=(25,))
+    assert result["forward"] is None
+    report = f.format_report(result)
+    assert "Forward and priced move unavailable" in report
+    assert "6975" in report and "n/a" in report
+    assert "market is probably closed" not in report

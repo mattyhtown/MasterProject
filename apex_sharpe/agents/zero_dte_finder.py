@@ -32,6 +32,7 @@ class Quote:
     iv: float
     volume: int
     open_interest: int
+    root: str = ""
 
     @property
     def mid(self) -> float:
@@ -142,7 +143,7 @@ def parse_contracts(rows: Iterable[Dict[str, Any]], expiry: str = "") -> List[Qu
         parsed = parse_occ(str(row.get("option_symbol", "")))
         if not parsed:
             continue
-        _, row_expiry, right, strike = parsed
+        root, row_expiry, right, strike = parsed
         if expiry and row_expiry != expiry:
             continue
         quotes.append(Quote(
@@ -154,8 +155,28 @@ def parse_contracts(rows: Iterable[Dict[str, Any]], expiry: str = "") -> List[Qu
             iv=_num(row.get("implied_volatility")),
             volume=int(_num(row.get("volume"))),
             open_interest=int(_num(row.get("open_interest"))),
+            root=root,
         ))
     return sorted(quotes, key=lambda q: (q.strike, q.right))
+
+
+def pick_root(quotes: Sequence[Quote]) -> str:
+    """Choose one settlement series so spreads never mix AM and PM settlement.
+
+    On monthly-expiry dates SPX (AM-settled) and SPXW (PM-settled) share an
+    expiry date. A same-day scan wants the PM-settled weekly root (ending in
+    "W"); otherwise the root with the most contracts.
+    """
+    counts: Dict[str, int] = {}
+    for q in quotes:
+        counts[q.root] = counts.get(q.root, 0) + 1
+    if not counts:
+        return ""
+    return max(counts, key=lambda r: (r.endswith("W"), counts[r]))
+
+
+def has_two_sided_quotes(quotes: Sequence[Quote]) -> bool:
+    return any(q.bid > 0 and q.ask > 0 for q in quotes)
 
 
 def _two_sided_pairs(quotes: Sequence[Quote]) -> List[Tuple[Quote, Quote]]:
@@ -248,11 +269,14 @@ def scan(
 ) -> Dict[str, Any]:
     """Run the full scan over raw chain rows."""
     quotes = parse_contracts(rows, expiry=expiry)
+    root = pick_root(quotes)
+    quotes = [q for q in quotes if q.root == root]
     kwargs = dict(widths=widths, min_delta=min_delta, max_delta=max_delta,
                   min_credit=min_credit, min_volume=min_volume)
     puts = find_credit_spreads(quotes, "put", **kwargs)
     calls = find_credit_spreads(quotes, "call", **kwargs)
     return {
+        "root": root,
         "quotes": quotes,
         "forward": implied_forward(quotes),
         "expected_move": expected_move(quotes),
@@ -266,14 +290,19 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
     """Plain-text tables for the CLI."""
     lines = []
     forward, move = result["forward"], result["expected_move"]
+    if not result["quotes"]:
+        return "  No contracts in the chain — nothing to scan."
+    if not has_two_sided_quotes(result["quotes"]):
+        return (f"  {len(result['quotes'])} contracts but none has both a bid and an ask."
+                "\n  The market is probably closed: re-run during regular hours"
+                " (9:30-16:15 ET).")
+    root = result.get("root") or "-"
     if forward is None or move is None:
-        if result["quotes"]:
-            return (f"  {len(result['quotes'])} contracts but none has both a bid and an ask."
-                    "\n  The market is probably closed: re-run during regular hours"
-                    " (9:30-16:15 ET).")
-        return "  No two-sided quotes in the chain — nothing to scan."
-    lines.append(f"  Forward {forward:,.1f}   priced move into close ±{move:.1f}"
-                 f" ({move / forward:.2%})   {len(result['quotes'])} contracts")
+        lines.append(f"  Forward and priced move unavailable (no quoted call/put pair"
+                     f" at a common strike)   {root}   {len(result['quotes'])} contracts")
+    else:
+        lines.append(f"  Forward {forward:,.1f}   priced move into close ±{move:.1f}"
+                     f" ({move / forward:.2%})   {root}   {len(result['quotes'])} contracts")
     header = (f"  {'Short':>7} {'Long':>7} {'Wid':>4} {'Δ':>6} {'Credit':>7}"
               f" {'MaxLoss':>8} {'RoR':>6} {'POP':>6} {'Dist':>6} {'Vol':>7}")
     for title, key in (("Put credit spreads", "put_spreads"),
@@ -285,11 +314,14 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             continue
         lines.append(header)
         for s in spreads:
-            dist = abs(s.short.strike - forward) / move if move else 0.0
+            if forward is not None and move:
+                dist_txt = f"{abs(s.short.strike - forward) / move:>5.1f}x"
+            else:
+                dist_txt = f"{'n/a':>6}"
             lines.append(
                 f"  {s.short.strike:>7.0f} {s.long.strike:>7.0f} {s.width:>4.0f}"
                 f" {abs(s.short.delta):>6.2f} {s.credit:>7.2f} {s.max_loss:>8.2f}"
-                f" {s.return_on_risk:>6.1%} {s.pop:>6.1%} {dist:>5.1f}x"
+                f" {s.return_on_risk:>6.1%} {s.pop:>6.1%} {dist_txt}"
                 f" {s.short.volume:>7,}")
     lines.append("\n  Iron condors")
     condors = result["iron_condors"][:top]
