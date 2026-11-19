@@ -354,6 +354,20 @@ class StateCfg:
     cache_path: str = ""      # resolved at load time
 
 
+@dataclass(frozen=True)
+class WebhookCfg:
+    """Outbound and inbound webhook configuration."""
+    urls: tuple = ()
+    secret: str = ""
+    timeout: int = 10
+    format: str = "auto"              # 'auto', 'json', 'slack', 'discord'
+    inbound_secret: str = ""
+    github_secret: str = ""
+    host: str = "127.0.0.1"
+    port: int = 8080
+    max_body_bytes: int = 1048576     # 1 MiB
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -363,6 +377,7 @@ class AppConfig:
     """Top-level config composing all sub-configs."""
     orats: OratsCfg = field(default_factory=OratsCfg)
     unusual_whales: UnusualWhalesCfg = field(default_factory=UnusualWhalesCfg)
+    webhook: WebhookCfg = field(default_factory=WebhookCfg)
     supabase: SupabaseCfg = field(default_factory=SupabaseCfg)
     scanner: ScannerCfg = field(default_factory=ScannerCfg)
     risk: RiskCfg = field(default_factory=RiskCfg)
@@ -446,5 +461,15 @@ def load_config() -> AppConfig:
             tickers=tuple(_env("CHAIN_TICKERS", "SPY,SPX").split(",")),
             poll_interval=int(_env("CHAIN_POLL_INTERVAL", "300")),
             source=_env("CHAIN_SOURCE", "orats"),
+        ),
+        webhook=WebhookCfg(
+            urls=tuple(u.strip() for u in _env("WEBHOOK_URL").split(",") if u.strip()),
+            secret=_env("WEBHOOK_SECRET"),
+            timeout=int(_env("WEBHOOK_TIMEOUT", "10")),
+            format=_env("WEBHOOK_FORMAT", "auto"),
+            inbound_secret=_env("WEBHOOK_INBOUND_SECRET"),
+            github_secret=_env("GITHUB_WEBHOOK_SECRET"),
+            host=_env("WEBHOOK_HOST", "127.0.0.1"),
+            port=int(_env("WEBHOOK_PORT", "8080")),
         ),
     )
