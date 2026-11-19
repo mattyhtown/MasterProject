@@ -354,6 +354,51 @@ class StateCfg:
     cache_path: str = ""      # resolved at load time
 
 
+@dataclass(frozen=True)
+class WebhookCfg:
+    """Outbound notification and inbound receiver webhook settings."""
+    enabled: bool = False
+    slack_url: str = ""
+    discord_url: str = ""
+    generic_urls: tuple = ()
+    signing_secret: str = ""
+    timeout: int = 10
+    max_retries: int = 2
+    min_severity: str = "INFO"
+    listen_host: str = "127.0.0.1"
+    listen_port: int = 8080
+    inbound_secret: str = ""
+
+
+def load_webhook_config() -> WebhookCfg:
+    """Construct WebhookCfg from environment variables."""
+    slack_url = _env("SLACK_WEBHOOK_URL").strip()
+    discord_url = _env("DISCORD_WEBHOOK_URL").strip()
+    raw_urls = _env("WEBHOOK_URLS").strip()
+    generic_urls = tuple(u.strip() for u in raw_urls.split(",") if u.strip())
+    raw_enabled = _env("WEBHOOK_ENABLED").strip().lower()
+    if raw_enabled in ("true", "1", "yes"):
+        enabled = True
+    elif raw_enabled in ("false", "0", "no"):
+        enabled = False
+    else:
+        enabled = bool(slack_url or discord_url or generic_urls)
+
+    return WebhookCfg(
+        enabled=enabled,
+        slack_url=slack_url,
+        discord_url=discord_url,
+        generic_urls=generic_urls,
+        signing_secret=_env("WEBHOOK_SIGNING_SECRET").strip(),
+        timeout=int(_env("WEBHOOK_TIMEOUT", "10")),
+        max_retries=int(_env("WEBHOOK_MAX_RETRIES", "2")),
+        min_severity=_env("WEBHOOK_MIN_SEVERITY", "INFO").strip().upper() or "INFO",
+        listen_host=_env("WEBHOOK_HOST", "127.0.0.1").strip() or "127.0.0.1",
+        listen_port=int(_env("WEBHOOK_PORT", "8080")),
+        inbound_secret=_env("WEBHOOK_INBOUND_SECRET").strip(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -393,6 +438,8 @@ class AppConfig:
     # IB
     ib: IBCfg = field(default_factory=IBCfg)
     chain_ingest: ChainIngestCfg = field(default_factory=ChainIngestCfg)
+    # Webhooks
+    webhooks: WebhookCfg = field(default_factory=WebhookCfg)
 
 
 def load_config() -> AppConfig:
@@ -447,4 +494,5 @@ def load_config() -> AppConfig:
             poll_interval=int(_env("CHAIN_POLL_INTERVAL", "300")),
             source=_env("CHAIN_SOURCE", "orats"),
         ),
+        webhooks=load_webhook_config(),
     )
