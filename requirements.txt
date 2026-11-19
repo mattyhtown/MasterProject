@@ -9,3 +9,6 @@ supabase>=2.0.0
 
 # Testing
 pytest>=8.0.0
+
+# Charts (optional — only for `0dte-find --chart`)
+matplotlib>=3.7
