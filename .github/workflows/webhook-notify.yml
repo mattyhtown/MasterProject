@@ -1,0 +1,66 @@
+name: Webhook Notify
+
+on:
+  workflow_run:
+    workflows: ["CI", "CD"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.head_repository.full_name == github.repository
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Send workflow completion webhook
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "WEBHOOK_URL secret is not set; skipping workflow webhook notification."
+            exit 0
+          fi
+          python - << 'EOF'
+          import os
+          import sys
+          from apex_sharpe.config import WebhookCfg
+          from apex_sharpe.webhooks import WebhookClient
+
+          workflow_name = os.environ["WORKFLOW_NAME"]
+          conclusion = os.environ.get("CONCLUSION", "unknown")
+          head_branch = os.environ["HEAD_BRANCH"]
+          head_sha = os.environ.get("HEAD_SHA", "")
+          run_url = os.environ["RUN_URL"]
+          severity = "SUCCESS" if conclusion == "success" else "FAIL" if conclusion in ("failure", "timed_out") else "WARNING"
+          urls = tuple(u.strip() for u in os.environ["WEBHOOK_URL"].split(",") if u.strip())
+          client = WebhookClient(WebhookCfg(urls=urls, secret=os.environ.get("WEBHOOK_SECRET", "")))
+          results = client.send(
+              event="ci.workflow_run",
+              title=f"{workflow_name}: {conclusion}",
+              message=f"Branch {head_branch} completed with conclusion: {conclusion}.",
+              subtitle=head_sha[:8],
+              severity=severity,
+              data={
+                  "workflow": workflow_name,
+                  "branch": head_branch,
+                  "conclusion": conclusion,
+                  "run_url": run_url,
+              },
+          )
+          for r in results:
+              print(f"{r.url}: ok={r.ok} status={r.status_code} error={r.error}")
+          if any(not r.ok for r in results):
+              sys.exit(1)
+          EOF

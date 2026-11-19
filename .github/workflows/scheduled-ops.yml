@@ -1,0 +1,112 @@
+name: Scheduled Ops
+
+on:
+  schedule:
+    # Weekdays 13:30 UTC (pre-market US Eastern)
+    - cron: "30 13 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Read-only ops/research command to run"
+        required: true
+        default: "health"
+        type: choice
+        options:
+          - health
+          - security
+          - agents
+
+permissions:
+  contents: read
+
+jobs:
+  ops-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Run read-only ops check
+        id: ops
+        env:
+          OPS_MODE: ${{ github.event.inputs.mode || 'health' }}
+          ORATS_TOKEN: ${{ secrets.ORATS_TOKEN }}
+          UNUSUAL_WHALES_API_KEY: ${{ secrets.UNUSUAL_WHALES_API_KEY }}
+        run: |
+          python - << 'EOF'
+          import os
+          import sys
+          from apex_sharpe.agents.ops import InfraAgent, SecurityAgent
+          from apex_sharpe.agents.manager import AgentManager
+          from apex_sharpe.config import load_config
+          from apex_sharpe.data.orats_client import ORATSClient
+
+          mode = os.environ.get("OPS_MODE", "health")
+          cfg = load_config()
+          summary_path = os.environ["GITHUB_STEP_SUMMARY"]
+
+          if mode == "health":
+              orats = ORATSClient(cfg.orats) if cfg.orats.token else None
+              agent = InfraAgent(cfg.infra)
+              res = agent.run({"action": "health_check", "orats": orats})
+              agent.print_report(res)
+              status = res.data.get("status", "UNKNOWN")
+              with open(summary_path, "a") as fh:
+                  fh.write(f"## Scheduled Ops: health ({status})\n\n")
+                  for k, v in res.data.get("checks", {}).items():
+                      st = v["status"]
+                      dt = v["detail"]
+                      fh.write(f"- **{k}**: {st} ({dt})\n")
+              if status == "FAIL":
+                  sys.exit(1)
+          elif mode == "security":
+              agent = SecurityAgent(cfg.security)
+              res = agent.run({"action": "audit_config", "project_root": "."})
+              agent.print_report(res)
+              findings = [f for f in res.data.get("findings", []) if f["check"] in ("hardcoded_secret", "gitignore_env")]
+              sec_status = res.data.get("status")
+              with open(summary_path, "a") as fh:
+                  fh.write(f"## Scheduled Ops: security ({sec_status})\n\n")
+                  fh.write(f"- Critical source findings: {len(findings)}\n")
+              if findings:
+                  sys.exit(1)
+          elif mode == "agents":
+              mgr = AgentManager()
+              mgr.print_status()
+              with open(summary_path, "a") as fh:
+                  fh.write("## Scheduled Ops: agents\n\nAgent registry check passed.\n")
+          else:
+              print(f"Unsupported mode: {mode}")
+              sys.exit(1)
+          EOF
+      - name: Notify via webhook on failure
+        if: failure()
+        env:
+          WEBHOOK_URL: ${{ secrets.WEBHOOK_URL }}
+          WEBHOOK_SECRET: ${{ secrets.WEBHOOK_SECRET }}
+          OPS_MODE: ${{ github.event.inputs.mode || 'health' }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$WEBHOOK_URL" ]; then
+            echo "WEBHOOK_URL secret is not set; skipping alert webhook."
+            exit 0
+          fi
+          python - << 'EOF'
+          import os
+          from apex_sharpe.config import WebhookCfg
+          from apex_sharpe.webhooks import WebhookClient
+
+          ops_mode = os.environ["OPS_MODE"]
+          run_url = os.environ["RUN_URL"]
+          urls = tuple(u.strip() for u in os.environ["WEBHOOK_URL"].split(",") if u.strip())
+          client = WebhookClient(WebhookCfg(urls=urls, secret=os.environ.get("WEBHOOK_SECRET", "")))
+          client.send(
+              event="ops.alert",
+              title=f"Scheduled Ops Check Failed: {ops_mode}",
+              message="See GitHub Actions run logs for details.",
+              severity="ACTION",
+              data={"mode": ops_mode, "run_url": run_url},
+          )
+          EOF

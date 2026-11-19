@@ -124,7 +124,19 @@ python -m apex_sharpe patterns seasonal|mr|momentum|events|vol [ticker]
 python -m apex_sharpe macro dashboard|risk|yield|rotation|signals
 python -m apex_sharpe strategy-scan [ticker]            # Strategy development
 python -m apex_sharpe uw-flow [ticker] [limit]          # Unusual Whales flow (paper/research)
+python -m apex_sharpe webhook-serve [host] [port]      # Inbound webhook HTTP server
+python -m apex_sharpe webhook-test [event] [message]   # Send test outbound webhook
 ```
+
+## Webhooks & CI/CD
+
+- **Outbound webhooks** (`WEBHOOK_URL`, `WEBHOOK_SECRET`, `WEBHOOK_FORMAT=auto|json|slack|discord`): automatically dispatches signed JSON, Slack, or Discord payloads from `send_notification()` and CI/CD workflows.
+- **Inbound webhook server** (`python -m apex_sharpe webhook-serve`): stdlib HTTP server exposing `GET /health` and `POST /webhook` / `POST /webhooks/<github|tradingview|supabase|ops>` with HMAC-SHA256 verification (`WEBHOOK_INBOUND_SECRET`, `GITHUB_WEBHOOK_SECRET`). Signal webhooks only record observations to state/historian and never bypass `RiskAgent`.
+- **GitHub Actions**:
+  - `.github/workflows/ci.yml` — Python 3.12/3.13 unit tests, syntax checks, `SecurityAgent` scan, webhook `/health` smoke test, and Docker build validation.
+  - `.github/workflows/cd.yml` — Builds and publishes container images to GHCR (`ghcr.io`) on `main` pushes and `v*.*.*` tags, with optional deployment webhook notifications.
+  - `.github/workflows/scheduled-ops.yml` — Weekday pre-market & manual read-only ops checks (`health`, `security`, `agents`) with failure webhook alerts.
+  - `.github/workflows/webhook-notify.yml` — Dispatches signed webhook notifications on CI/CD workflow completion when `WEBHOOK_URL` secret is set.
 
 ## Docker
 
