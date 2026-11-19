@@ -15,7 +15,8 @@ apex_sharpe/
   data/             ORATSClient, UnusualWhalesClient, StateManager, HistoricalLoader, yfinance
   selection/        SignalSizer, AdaptiveSelector
   database/         SupabaseSync
-  tests/            217 tests
+  webhooks/         WebhookDispatcher (Slack/Discord/JSON), WebhookServer (HTTP receiver)
+  tests/            tests
 ```
 
 ### Agent Registry
@@ -124,6 +125,10 @@ python -m apex_sharpe patterns seasonal|mr|momentum|events|vol [ticker]
 python -m apex_sharpe macro dashboard|risk|yield|rotation|signals
 python -m apex_sharpe strategy-scan [ticker]            # Strategy development
 python -m apex_sharpe uw-flow [ticker] [limit]          # Unusual Whales flow (paper/research)
+
+# Webhooks
+python -m apex_sharpe webhook-test                     # Send test notification to configured webhooks
+python -m apex_sharpe webhook-serve [host] [port]      # Start authenticated inbound webhook receiver
 ```
 
 ## Docker
