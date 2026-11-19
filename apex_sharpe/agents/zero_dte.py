@@ -754,7 +754,8 @@ class ZeroDTEAgent(BaseAgent):
         from datetime import time as dtime
         return dtime(9, 30) <= t <= dtime(16, 0)
 
-    def run_live(self, orats, state, db=None, auto_exit: bool = False) -> None:
+    def run_live(self, orats, state, db=None, auto_exit: bool = False,
+                 webhook_config=None) -> None:
         """Live polling mode. Runs until Ctrl+C or market close (if auto_exit).
 
         Args:
@@ -870,6 +871,11 @@ class ZeroDTEAgent(BaseAgent):
                             title=f"0DTE: {dm.get(composite, 'ALERT')}",
                             subtitle=f"{ticker} — {len(t1)} Tier 1",
                             message=", ".join(t1),
+                            severity="ACTION",
+                            event_type="zero_dte_composite",
+                            ticker=ticker,
+                            data={"composite": composite, "tier1": t1, "spot": spot},
+                            webhook_config=webhook_config,
                         )
                     elif any(v["level"] == "WARNING" for v in signals.values()):
                         wn = sum(1 for v in signals.values() if v["level"] == "WARNING")
@@ -878,6 +884,11 @@ class ZeroDTEAgent(BaseAgent):
                             f"{wn} warning(s)",
                             "Check terminal",
                             sound=False,
+                            severity="WARNING",
+                            event_type="zero_dte_warning",
+                            ticker=ticker,
+                            data={"warning_count": wn, "spot": spot},
+                            webhook_config=webhook_config,
                         )
 
                 print(f"\n  {C.DIM}Poll #{n}. Next in {cfg.poll_interval}s "

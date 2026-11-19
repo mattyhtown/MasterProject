@@ -151,7 +151,7 @@ AGENT_REGISTRY: List[AgentCapability] = [
         signal_systems=[],
         trade_actions=["notify"],
         risk_level=RiskLevel.LOW,
-        description="Terminal reports and macOS notifications",
+        description="Terminal reports, macOS notifications, and outbound webhooks",
     ),
     # Strategy agents
     AgentCapability(

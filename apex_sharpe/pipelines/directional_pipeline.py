@@ -85,7 +85,7 @@ class DirectionalPipeline:
         self.state = state
         self.monitor = ZeroDTEAgent(config.zero_dte)
         self.portfolio = PortfolioAgent(config.portfolio, config.signal_sizing)
-        self.reporter = ReporterAgent()
+        self.reporter = ReporterAgent(config.webhooks)
         self._strategy_cache: Dict[TradeStructure, Any] = {}
 
     def _get_strategy_agent(self, structure: TradeStructure):
@@ -294,6 +294,14 @@ class DirectionalPipeline:
                                             subtitle=f"→ {bear_structure.value}",
                                             message=f"Bearish flip | "
                                                     f"{core_count} signals",
+                                            severity="ACTION",
+                                            event_type="directional_flip",
+                                            ticker=ticker,
+                                            data={
+                                                "structure": bear_structure.value,
+                                                "core_count": core_count,
+                                            },
+                                            webhook_config=self.config.webhooks,
                                         )
 
                     # -- Open new position if composite and no active trade --
@@ -361,6 +369,16 @@ class DirectionalPipeline:
                                 subtitle=f"{ticker} — {data['structure']}",
                                 message=f"${data['risk_budget']:,.0f} risk | "
                                         f"{core_count} signals",
+                                severity="ACTION",
+                                event_type="directional_signal",
+                                ticker=ticker,
+                                data={
+                                    "composite": composite,
+                                    "structure": data["structure"],
+                                    "risk_budget": data["risk_budget"],
+                                    "core_count": core_count,
+                                },
+                                webhook_config=self.config.webhooks,
                             )
                         else:
                             for err in portfolio_result.errors:

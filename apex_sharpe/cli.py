@@ -48,6 +48,8 @@ Usage:
     python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
     python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
     python -m apex_sharpe uw-flow         — Unusual Whales flow alerts (research/paper only)
+    python -m apex_sharpe webhook-test    — Send a test event to configured webhooks
+    python -m apex_sharpe webhook-serve   — Start inbound webhook HTTP receiver
 """
 
 import sys
@@ -119,6 +121,10 @@ Interactive Brokers:
 
 Research data (paper only):
   uw-flow         Unusual Whales flow alerts [ticker] [limit]
+
+Webhooks:
+  webhook-test    Send a test notification to configured outbound webhooks
+  webhook-serve   Start inbound webhook HTTP receiver [host] [port]
 """
 
 
@@ -1086,6 +1092,64 @@ def main() -> None:
                   f" {str(prem):>12}"
                   f" {str(size):>8}"
                   f" {chain}")
+
+    # -- Webhooks ----------------------------------------------------------
+
+    elif mode in ("webhook-test", "webhook_test"):
+        from .webhooks import WebhookDispatcher, WebhookEvent
+
+        dispatcher = WebhookDispatcher(config.webhooks)
+        if not dispatcher.has_targets:
+            print("  [ERROR] No webhook targets configured. Set SLACK_WEBHOOK_URL, "
+                  "DISCORD_WEBHOOK_URL, or WEBHOOK_URLS in .env")
+            sys.exit(1)
+        if not dispatcher.enabled:
+            print("  [ERROR] Webhooks are disabled (WEBHOOK_ENABLED=false)")
+            sys.exit(1)
+
+        event = WebhookEvent(
+            event_type="test",
+            title="APEX-SHARPE Webhook Test",
+            subtitle="Connectivity check",
+            message="Test notification from APEX-SHARPE CLI",
+            severity="INFO",
+            source="apex_sharpe.cli",
+        )
+        results = dispatcher.dispatch(event)
+        all_ok = True
+        for res in results:
+            tag = "OK" if res.success else "FAIL"
+            detail = f"HTTP {res.status_code}" if res.status_code else res.error
+            print(f"  [{tag}] {res.provider} -> {res.target} ({detail})")
+            if not res.success:
+                all_ok = False
+        if not all_ok:
+            sys.exit(1)
+
+    elif mode in ("webhook-serve", "webhook_serve"):
+        from dataclasses import replace
+        from .webhooks import create_webhook_server
+
+        wh_cfg = config.webhooks
+        if len(sys.argv) > 2:
+            wh_cfg = replace(wh_cfg, listen_host=sys.argv[2])
+        if len(sys.argv) > 3:
+            wh_cfg = replace(wh_cfg, listen_port=int(sys.argv[3]))
+
+        if not wh_cfg.inbound_secret:
+            print("  [ERROR] WEBHOOK_INBOUND_SECRET must be set to start webhook-serve")
+            sys.exit(1)
+
+        server = create_webhook_server(config=wh_cfg, state=state)
+        host, port = server.server_address
+        print(f"  APEX-SHARPE webhook receiver listening on http://{host}:{port}")
+        print("  Routes: GET /health, POST /webhooks/signal, "
+              "POST /webhooks/supabase, POST /webhooks/alert")
+        try:
+            server.serve_forever()
+        except KeyboardInterrupt:
+            print("\n  Stopping webhook receiver...")
+            server.stop()
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

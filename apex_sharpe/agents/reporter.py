@@ -1,57 +1,134 @@
 """
-ReporterAgent — terminal output and macOS notifications.
+ReporterAgent — terminal output, macOS notifications, and outbound webhooks.
 
 Extracted from trading_pipeline.py.
 """
 
 import subprocess
+import sys
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from .base import BaseAgent
 from .monitor import calculate_dte
+from ..config import WebhookCfg, load_webhook_config
 from ..types import AgentResult, C
+from ..webhooks import WebhookDeliveryResult, WebhookDispatcher, WebhookEvent
 
 
-def send_notification(title: str, message: str, subtitle: str = "", sound: bool = True) -> None:
-    title = title.replace('"', '\\"')
-    message = message.replace('"', '\\"')
-    subtitle = subtitle.replace('"', '\\"')
-    sound_line = 'sound name "Glass"' if sound else ""
-    script = f'display notification "{message}" with title "{title}" subtitle "{subtitle}" {sound_line}'
-    try:
-        subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
-    except Exception as exc:
-        print(f"  [WARN] Notification failed: {exc}")
+def send_notification(
+    title: str,
+    message: str,
+    subtitle: str = "",
+    sound: bool = True,
+    *,
+    severity: str = "INFO",
+    event_type: str = "notification",
+    ticker: str = "",
+    source: str = "apex_sharpe",
+    data: Optional[Dict[str, Any]] = None,
+    webhook_config: Optional[WebhookCfg] = None,
+) -> List[WebhookDeliveryResult]:
+    """Send desktop notification (macOS) and dispatch configured webhooks."""
+    if sys.platform == "darwin":
+        safe_title = title.replace('"', '\\"')
+        safe_message = message.replace('"', '\\"')
+        safe_subtitle = subtitle.replace('"', '\\"')
+        sound_line = 'sound name "Glass"' if sound else ""
+        script = (
+            f'display notification "{safe_message}" '
+            f'with title "{safe_title}" subtitle "{safe_subtitle}" {sound_line}'
+        )
+        try:
+            subprocess.run(["osascript", "-e", script], capture_output=True, timeout=10)
+        except Exception as exc:
+            print(f"  [WARN] Notification failed: {exc}")
+
+    cfg = webhook_config if webhook_config is not None else load_webhook_config()
+    dispatcher = WebhookDispatcher(cfg)
+    if not dispatcher.enabled:
+        return []
+
+    event = WebhookEvent(
+        event_type=event_type,
+        title=title,
+        subtitle=subtitle,
+        message=message,
+        severity=severity,
+        source=source,
+        ticker=ticker,
+        data=data or {},
+    )
+    results = dispatcher.dispatch(event)
+    for res in results:
+        if not res.success:
+            print(f"  [WARN] Webhook ({res.provider} -> {res.target}) failed: {res.error}")
+    return results
 
 
 class ReporterAgent(BaseAgent):
-    """Print reports and send macOS notifications."""
+    """Print reports, send macOS notifications, and dispatch outbound webhooks."""
 
-    def __init__(self):
-        super().__init__("Reporter")
+    def __init__(self, webhook_config: Optional[WebhookCfg] = None):
+        super().__init__("Reporter", webhook_config)
+        self.webhook_config = webhook_config
 
     def run(self, context: Dict[str, Any]) -> AgentResult:
         """Dispatch to appropriate report method based on context."""
+        deliveries: List[WebhookDeliveryResult] = []
         if "scan_result" in context:
-            self.report_scan(
+            deliveries.extend(self.report_scan(
                 context.get("candidates", []),
                 context.get("risk_decisions", []),
                 context.get("new_positions", []),
-            )
+                webhook_config=self.webhook_config,
+            ))
         if "monitor_results" in context:
-            self.report_monitor(
+            deliveries.extend(self.report_monitor(
                 context["monitor_results"],
                 context.get("closed_positions", []),
-            )
-        return self._result(success=True)
+                webhook_config=self.webhook_config,
+            ))
+        if "webhook_event" in context:
+            ev_data = context["webhook_event"]
+            if isinstance(ev_data, WebhookEvent):
+                cfg = self.webhook_config if self.webhook_config is not None else load_webhook_config()
+                deliveries.extend(WebhookDispatcher(cfg).dispatch(ev_data))
+            elif isinstance(ev_data, dict):
+                deliveries.extend(send_notification(
+                    title=str(ev_data.get("title", "APEX-SHARPE Alert")),
+                    message=str(ev_data.get("message", "")),
+                    subtitle=str(ev_data.get("subtitle", "")),
+                    severity=str(ev_data.get("severity", "INFO")),
+                    event_type=str(ev_data.get("event_type", "alert")),
+                    ticker=str(ev_data.get("ticker", "")),
+                    source=str(ev_data.get("source", "apex_sharpe")),
+                    data=ev_data.get("data") if isinstance(ev_data.get("data"), dict) else None,
+                    webhook_config=self.webhook_config,
+                ))
+        return self._result(
+            success=True,
+            data={
+                "deliveries": [
+                    {
+                        "target": d.target,
+                        "provider": d.provider,
+                        "success": d.success,
+                        "status_code": d.status_code,
+                        "error": d.error,
+                    }
+                    for d in deliveries
+                ]
+            },
+        )
 
     @staticmethod
     def report_scan(
         candidates: List[Dict],
         risk_results: List[Dict],
         new_positions: List[Dict],
-    ) -> None:
+        webhook_config: Optional[WebhookCfg] = None,
+    ) -> List[WebhookDeliveryResult]:
         print(f"\n{'=' * 80}")
         print("APEX-SHARPE SCAN REPORT")
         print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -72,17 +149,25 @@ class ReporterAgent(BaseAgent):
         # Only notify on actual trade opens — suppress noise from
         # blocked candidates and empty scans (these fire every cron run)
         if new_positions:
-            send_notification(
+            first = new_positions[0]
+            return send_notification(
                 title="APEX-SHARPE: New Position",
                 subtitle=f"{len(new_positions)} trade(s) opened",
-                message=f"{new_positions[0]['id']} — credit ${new_positions[0]['entry_credit']:.2f}",
+                message=f"{first['id']} — credit ${first['entry_credit']:.2f}",
+                severity="INFO",
+                event_type="trade_opened",
+                ticker=str(first.get("symbol", "")),
+                data={"positions": [p.get("id") for p in new_positions]},
+                webhook_config=webhook_config,
             )
+        return []
 
     @staticmethod
     def report_monitor(
         monitor_results: List[Dict],
         closed_positions: List[Dict],
-    ) -> None:
+        webhook_config: Optional[WebhookCfg] = None,
+    ) -> List[WebhookDeliveryResult]:
         print(f"\n{'=' * 80}")
         print("APEX-SHARPE MONITOR REPORT")
         print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -90,7 +175,7 @@ class ReporterAgent(BaseAgent):
 
         if not monitor_results:
             print("\nNo open positions to monitor.")
-            return
+            return []
 
         total_pnl = 0.0
         action_alerts: List[str] = []
@@ -149,14 +234,30 @@ class ReporterAgent(BaseAgent):
 
         # Only notify on ACTION or WARNING — suppress "All Clear" noise
         if action_alerts:
-            send_notification(
+            return send_notification(
                 title="APEX-SHARPE: ACTION REQUIRED",
                 subtitle=f"{len(action_alerts)} position(s) need attention",
                 message=action_alerts[0][:200],
+                severity="ACTION",
+                event_type="position_action",
+                data={
+                    "total_pnl": round(total_pnl, 2),
+                    "closed_count": len(closed_positions),
+                    "actions": action_alerts,
+                },
+                webhook_config=webhook_config,
             )
         elif warning_alerts:
-            send_notification(
+            return send_notification(
                 title="APEX-SHARPE: Warning",
                 subtitle=f"{len(warning_alerts)} warning(s)",
                 message=warning_alerts[0][:200],
+                severity="WARNING",
+                event_type="position_warning",
+                data={
+                    "total_pnl": round(total_pnl, 2),
+                    "warnings": warning_alerts,
+                },
+                webhook_config=webhook_config,
             )
+        return []

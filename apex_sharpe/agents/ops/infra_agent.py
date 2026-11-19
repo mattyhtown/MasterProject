@@ -124,6 +124,10 @@ class InfraAgent(BaseAgent):
             "SUPABASE_URL": "Supabase project URL",
             "SUPABASE_KEY": "Supabase anon key",
             "UNUSUAL_WHALES_API_KEY": "Unusual Whales API (research/paper only)",
+            "SLACK_WEBHOOK_URL": "Slack incoming webhook URL",
+            "DISCORD_WEBHOOK_URL": "Discord webhook URL",
+            "WEBHOOK_URLS": "Generic JSON webhook URLs",
+            "WEBHOOK_INBOUND_SECRET": "Inbound webhook authentication secret",
         }
 
         # Try loading .env first

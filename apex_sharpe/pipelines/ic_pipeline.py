@@ -42,7 +42,7 @@ class ICPipeline:
             self._ib_mode = False
 
         self.monitor_agent = MonitorAgent(config.monitor)
-        self.reporter = ReporterAgent()
+        self.reporter = ReporterAgent(config.webhooks)
         self.db = DatabaseAgent(config.supabase)
 
     # -- SCAN pipeline ----------------------------------------------------
@@ -61,7 +61,7 @@ class ICPipeline:
         candidates = scan_result.data.get("candidates", [])
 
         if not candidates:
-            self.reporter.report_scan([], [], [])
+            self.reporter.report_scan([], [], [], webhook_config=self.config.webhooks)
             return
 
         # 2. Risk check
@@ -86,7 +86,8 @@ class ICPipeline:
         })
 
         # 6. Report
-        self.reporter.report_scan(candidates, decisions, new_positions)
+        self.reporter.report_scan(candidates, decisions, new_positions,
+                                  webhook_config=self.config.webhooks)
 
     # -- MONITOR pipeline -------------------------------------------------
 
@@ -107,6 +108,9 @@ class ICPipeline:
                 subtitle="No open positions",
                 message="Nothing to check",
                 sound=False,
+                severity="INFO",
+                event_type="monitor_idle",
+                webhook_config=self.config.webhooks,
             )
             return
 
@@ -189,7 +193,8 @@ class ICPipeline:
         for cp in closed_positions:
             self.db.run({"action": "log_close", "position": cp})
 
-        self.reporter.report_monitor(monitor_results, closed_positions)
+        self.reporter.report_monitor(monitor_results, closed_positions,
+                                     webhook_config=self.config.webhooks)
 
     # -- FULL pipeline ----------------------------------------------------
 
