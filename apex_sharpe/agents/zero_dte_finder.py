@@ -267,6 +267,10 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
     lines = []
     forward, move = result["forward"], result["expected_move"]
     if forward is None or move is None:
+        if result["quotes"]:
+            return (f"  {len(result['quotes'])} contracts but none has both a bid and an ask."
+                    "\n  The market is probably closed: re-run during regular hours"
+                    " (9:30-16:15 ET).")
         return "  No two-sided quotes in the chain — nothing to scan."
     lines.append(f"  Forward {forward:,.1f}   priced move into close ±{move:.1f}"
                  f" ({move / forward:.2%})   {len(result['quotes'])} contracts")

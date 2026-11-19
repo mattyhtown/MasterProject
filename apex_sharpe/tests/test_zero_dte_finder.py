@@ -73,3 +73,10 @@ def test_empty_chain_reports_cleanly():
     result = f.scan([])
     assert result["forward"] is None
     assert "nothing to scan" in f.format_report(result)
+
+
+def test_quotes_without_bids_say_market_closed():
+    closed = [_row("C", 7000, 0, 0, 0.5), _row("P", 7000, 0, 0, -0.5)]
+    report = f.format_report(f.scan(closed, expiry="2026-11-16"))
+    assert "2 contracts but none has both a bid and an ask" in report
+    assert "market is probably closed" in report
