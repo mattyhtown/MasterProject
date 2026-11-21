@@ -134,7 +134,8 @@ class UnusualWhalesClient:
                 return list(by_symbol.values())
             for i, row in enumerate(batch):
                 symbol = row.get("option_symbol") if isinstance(row, dict) else None
-                if not isinstance(symbol, str) or not symbol.strip():
+                if (not isinstance(symbol, str) or not symbol.strip()
+                        or symbol != symbol.strip()):
                     raise UnusualWhalesError(
                         f"Unusual Whales option-contracts page {page} row {i} for"
                         f" {ticker} {expiry} has no option_symbol string")

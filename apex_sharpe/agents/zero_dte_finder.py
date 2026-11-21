@@ -37,6 +37,11 @@ def _ticks(strike: float) -> int:
     return int(round(strike * 1000))
 
 
+def fmt_points(value: float) -> str:
+    """Price in points: cents, or three decimals when smaller than a cent."""
+    return f"{value:.2f}" if abs(value) >= 0.01 or value == 0 else f"{value:.3f}"
+
+
 def fmt_strike(strike: float) -> str:
     """Strike as listed: no decimals for whole strikes, otherwise exact."""
     return f"{strike:.3f}".rstrip("0").rstrip(".")
@@ -259,11 +264,14 @@ def expected_move(quotes: Sequence[Quote]) -> Optional[float]:
     None when the nearest quoted pair is so far from the forward that
     intrinsic value, not time value, would make up most of the straddle.
     """
-    pair = _atm_pair(quotes)
     forward = implied_forward(quotes)
-    if pair is None or forward is None:
+    if forward is None:
         return None
-    call, put = pair
+    # The straddle is taken at the quoted strike nearest the forward, which
+    # need not be the pair that set the forward (that one is picked for tight
+    # quotes, not for being at the money).
+    pairs = _two_sided_pairs(quotes)
+    call, put = min(pairs, key=lambda cp: abs(cp[0].strike - forward))
     straddle = call.mid + put.mid
     if abs(call.strike - forward) > straddle / 2:
         return None
@@ -377,7 +385,7 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
     root = result.get("root") or "-"
     if forward is None:
         lines.append(f"  Forward and priced move unavailable (no clean call/put pair"
-                     f" at a common strike)   {root}   {len(result['quotes'])} contracts")
+                     f" gave a valid positive forward)   {root}   {len(result['quotes'])} contracts")
     elif move is None:
         lines.append(f"  Forward {forward:,.1f}   priced move unavailable (nearest quoted"
                      f" pair is far from the forward)   {root}"
@@ -403,7 +411,7 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             lines.append(
                 f"  {fmt_strike(s.short.strike):>7} {fmt_strike(s.long.strike):>7}"
                 f" {fmt_strike(s.width):>4}"
-                f" {abs(s.short.delta):>6.2f} {s.credit:>7.2f} {s.max_loss:>8.2f}"
+                f" {abs(s.short.delta):>6.2f} {s.credit:>7.2f} {fmt_points(s.max_loss):>8}"
                 f" {s.return_on_risk:>6.1%} {s.pop:>6.1%} {dist_txt}"
                 f" {s.short.volume:>7,}")
     lines.append("\n  Iron condors")
@@ -417,7 +425,7 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             put = f"{fmt_strike(c.put.long.strike)}/{fmt_strike(c.put.short.strike)}"
             call = f"{fmt_strike(c.call.short.strike)}/{fmt_strike(c.call.long.strike)}"
             lines.append(f"  {put:>13} {call:>13} {fmt_strike(c.width):>4} {c.credit:>7.2f}"
-                         f" {c.max_loss:>8.2f} {c.return_on_risk:>6.1%} {c.pop:>6.1%}")
+                         f" {fmt_points(c.max_loss):>8} {c.return_on_risk:>6.1%} {c.pop:>6.1%}")
     lines.append("\n  Credit = sell at bid, buy at ask. POP is a delta proxy:"
                  " spreads 1 - |Δ short|; condors 1 - |Δ short put| - |Δ short call|."
                  "\n  Dist = short strike distance in priced"

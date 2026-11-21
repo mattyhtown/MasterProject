@@ -1152,7 +1152,7 @@ def main() -> None:
         print(finder.format_report(result))
         if chart_path:
             if result["forward"] is None:
-                print("\n  No chart written: no clean call/put pair at a common strike,"
+                print("\n  No chart written: no clean call/put pair gave a valid positive forward,"
                       " so there is no forward to centre it on.")
             elif result["expected_move"] is None:
                 print("\n  No chart written: the priced move is unavailable (the nearest"

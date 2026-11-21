@@ -211,6 +211,7 @@ class TestOptionContractsPagination:
 
     @pytest.mark.parametrize("bad_row", [["not", "a", "dict"], {"option_symbol": ["x"]},
                                          {"option_symbol": ""}, {"option_symbol": "   "},
+                                         {"option_symbol": " SPXW261116C07000000"},
                                          {"volume": 1}])
     def test_malformed_row_raises_client_error(self, bad_row):
         client = UnusualWhalesClient(_cfg())

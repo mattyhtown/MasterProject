@@ -292,6 +292,11 @@ def test_tiny_fractional_width_keeps_its_exact_max_loss():
                                     min_credit=0.5)
     assert len(spreads) == 1
     assert spreads[0].max_loss == pytest.approx(0.004)
+    report = f.format_report({"root": "X", "quotes": f.parse_contracts(rows),
+                              "forward": None, "expected_move": None,
+                              "put_spreads": spreads, "call_spreads": [],
+                              "iron_condors": []})
+    assert " 0.004 " in report
 
 
 @pytest.mark.parametrize("bad", [float("inf"), 0, -10, 10.0004])
@@ -311,3 +316,13 @@ def test_duplicate_widths_build_each_spread_once():
                                           (16.1, "16.1")])
 def test_fmt_strike_keeps_every_occ_decimal(strike, text):
     assert f.fmt_strike(strike) == text
+
+
+def test_straddle_uses_strike_nearest_forward_not_tightest_pair():
+    # Both pairs imply a 7,000 forward; the tighter 7,005 pair sets it, but the
+    # move must come from the 7,000 straddle (11 points), not be suppressed.
+    rows = [_row("C", 7000, 3.5, 7.5, 0.5), _row("P", 7000, 3.5, 7.5, -0.5),
+            _row("C", 7005, 1.75, 2.25, 0.4), _row("P", 7005, 6.75, 7.25, -0.6)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7000.0)
+    assert result["expected_move"] == pytest.approx(11.0)
