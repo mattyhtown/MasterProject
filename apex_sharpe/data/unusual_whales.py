@@ -106,17 +106,23 @@ class UnusualWhalesClient:
         volume changes between page requests during the session. A contract can
         therefore appear on two pages; each symbol is kept once, from the
         latest page that returned it.
+
+        Pages are numbered from 0 (an omitted ``page`` is page 0). Raises
+        UnusualWhalesError if a page is malformed or the chain is longer than
+        ``max_pages`` pages, rather than returning a partial chain.
         """
         by_symbol: dict = {}
         unkeyed: list = []
         for page in range(max_pages):
             payload = self.get(
                 f"/api/stock/{ticker}/option-contracts",
-                {"expiry": expiry, "limit": page_size, "page": page or None},
+                {"expiry": expiry, "limit": page_size, "page": page},
             )
             batch = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(batch, list):
-                break
+                raise UnusualWhalesError(
+                    f"Unusual Whales option-contracts page {page} for {ticker} {expiry}"
+                    " has no 'data' list")
             for row in batch:
                 symbol = row.get("option_symbol") if isinstance(row, dict) else None
                 if symbol:
@@ -124,5 +130,7 @@ class UnusualWhalesClient:
                 else:
                     unkeyed.append(row)
             if len(batch) < page_size:
-                break
-        return list(by_symbol.values()) + unkeyed
+                return list(by_symbol.values()) + unkeyed
+        raise UnusualWhalesError(
+            f"{ticker} {expiry} chain is longer than {max_pages} pages of {page_size};"
+            " refusing to rank a partial chain")

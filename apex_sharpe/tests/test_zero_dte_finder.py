@@ -78,7 +78,7 @@ def test_empty_chain_reports_cleanly():
 def test_quotes_without_bids_say_market_closed():
     closed = [_row("C", 7000, 0, 0, 0.5), _row("P", 7000, 0, 0, -0.5)]
     report = f.format_report(f.scan(closed, expiry="2026-11-16"))
-    assert "2 contracts but none has both a bid and an ask" in report
+    assert "2 contracts but none has a bid or an ask" in report
     assert "market is probably closed" in report
 
 
@@ -117,3 +117,41 @@ def test_pick_root_prefers_pm_settled_sibling_for_other_indices():
             _row("P", 20000, 1, 1, -0.5, root="NDX"),
             _row("C", 20000, 1, 1, 0.5, root="NDXP")]
     assert f.pick_root(f.parse_contracts(rows)) == "NDXP"
+
+
+def test_crossed_quotes_are_never_priced():
+    # Long leg's ask (0.10) below its bid (0.60): a bad quote that would
+    # inflate the credit to 1.90.
+    rows = [_row("P", 6975, 2.0, 2.2, -0.15), _row("P", 6950, 0.6, 0.1, -0.05)]
+    result = f.scan(rows, expiry="2026-11-16", widths=(25,))
+    assert result["put_spreads"] == []
+
+
+def test_scan_refuses_to_mix_expirations():
+    with pytest.raises(ValueError, match="expirations"):
+        f.scan(CHAIN)  # CHAIN holds 16 Nov and 20 Nov rows
+
+
+def test_am_settled_only_chain_is_not_scanned():
+    rows = [_row("P", 6975, 2.0, 2.2, -0.15, root="SPX"),
+            _row("P", 6950, 0.5, 0.6, -0.05, root="SPX")]
+    result = f.scan(rows, expiry="2026-11-16", widths=(25,))
+    assert result["root"] == "" and result["put_spreads"] == []
+    assert "AM-settled" in f.format_report(result)
+
+
+def test_one_sided_quotes_are_not_reported_as_closed():
+    # Short has only a bid, long has only an ask: still a priceable spread.
+    rows = [_row("P", 6975, 2.0, 0, -0.15), _row("P", 6950, 0, 0.6, -0.05)]
+    result = f.scan(rows, expiry="2026-11-16", widths=(25,))
+    report = f.format_report(result)
+    assert "probably closed" not in report
+    assert "6975" in report
+
+
+def test_save_chart_rejects_result_without_forward(tmp_path):
+    pytest.importorskip("matplotlib")
+    rows = [_row("P", 6975, 2.0, 2.2, -0.15), _row("P", 6950, 0.5, 0.6, -0.05)]
+    result = f.scan(rows, expiry="2026-11-16", widths=(25,))
+    with pytest.raises(ValueError, match="forward"):
+        f.save_chart(result, str(tmp_path / "x.png"))

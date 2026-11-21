@@ -149,10 +149,30 @@ class TestOptionContractsPagination:
         # again on page 1 with an updated volume.
         page1 = {"data": [{"option_symbol": "SPXW261116C07002000", "volume": 999},
                           {"option_symbol": "SPXW261116C07003000", "volume": 1}]}
-        pages = iter([page0, page1])
-        with patch.object(client, "get", side_effect=lambda *a, **k: next(pages)):
+        by_page = {0: page0, 1: page1}
+        requested = []
+
+        def fake_get(path, params):
+            requested.append(params["page"])
+            return by_page[params["page"]]
+
+        with patch.object(client, "get", side_effect=fake_get):
             rows = client.option_contracts("SPX", "2026-11-16", page_size=3)
+        assert requested == [0, 1]  # pages are 0-based and advance
         symbols = [r["option_symbol"] for r in rows]
         assert len(symbols) == len(set(symbols)) == 4
         latest = {r["option_symbol"]: r["volume"] for r in rows}
         assert latest["SPXW261116C07002000"] == 999
+
+    def test_malformed_page_raises_instead_of_returning_partial_chain(self):
+        client = UnusualWhalesClient(_cfg())
+        with patch.object(client, "get", return_value={"error": "nope"}):
+            with pytest.raises(UnusualWhalesError, match="no 'data' list"):
+                client.option_contracts("SPX", "2026-11-16")
+
+    def test_chain_longer_than_max_pages_raises(self):
+        client = UnusualWhalesClient(_cfg())
+        full = {"data": [{"option_symbol": f"S{i}"} for i in range(2)]}
+        with patch.object(client, "get", return_value=full):
+            with pytest.raises(UnusualWhalesError, match="partial chain"):
+                client.option_contracts("SPX", "2026-11-16", page_size=2, max_pages=3)

@@ -5,7 +5,10 @@ Read-only research tool. It takes option-chain rows (Unusual Whales
 ``option-contracts`` shape), builds defined-risk credit structures, and ranks
 them. It never places or routes orders.
 
-Probabilities are the chain's own deltas, i.e. risk-neutral. At fair prices
+"POP" is 1 - |delta of the short strike|, a delta-based proxy for the
+risk-neutral chance of expiring out of the money. Delta is N(d1) while that
+probability is N(d2); they differ by sigma*sqrt(T), which is a fraction of a
+percentage point for same-day options. At fair prices
 every structure has roughly zero expected value before costs, so the score is
 a screening heuristic (return on risk x probability of keeping the credit),
 not a claim of edge.
@@ -38,6 +41,12 @@ class Quote:
     volume: int
     open_interest: int
     root: str = ""
+    expiry: str = ""
+
+    @property
+    def crossed(self) -> bool:
+        """Ask below bid: a stale or bad quote that must not be priced."""
+        return self.ask > 0 and self.bid > self.ask
 
     @property
     def mid(self) -> float:
@@ -75,7 +84,7 @@ class CreditSpread:
 
     @property
     def pop(self) -> float:
-        """Risk-neutral chance the short strike finishes out of the money."""
+        """Delta proxy for the chance the short strike expires out of the money."""
         return 1.0 - abs(self.short.delta)
 
     @property
@@ -114,7 +123,7 @@ class IronCondor:
 
     @property
     def pop(self) -> float:
-        """Risk-neutral chance price finishes between the short strikes."""
+        """Delta proxy for the chance price expires between the short strikes."""
         return max(0.0, 1.0 - abs(self.put.short.delta) - abs(self.call.short.delta))
 
     @property
@@ -161,6 +170,7 @@ def parse_contracts(rows: Iterable[Dict[str, Any]], expiry: str = "") -> List[Qu
             volume=int(_num(row.get("volume"))),
             open_interest=int(_num(row.get("open_interest"))),
             root=root,
+            expiry=row_expiry,
         ))
     return sorted(quotes, key=lambda q: (q.strike, q.right))
 
@@ -170,19 +180,22 @@ def pick_root(quotes: Sequence[Quote]) -> str:
 
     On monthly-expiry dates an AM-settled root (SPX, NDX, RUT, ...) shares
     its expiry date with a PM-settled sibling (SPXW, NDXP, RUTW, ...). A
-    same-day scan wants the PM-settled series, so AM-settled roots rank last;
-    among the rest, the root with the most contracts wins.
+    same-day scan wants the PM-settled series. AM-settled roots are never
+    chosen: on their expiry date they settled at the morning open. Among the
+    rest, the root with the most contracts wins; "" if none is eligible.
     """
     counts: Dict[str, int] = {}
     for q in quotes:
-        counts[q.root] = counts.get(q.root, 0) + 1
+        if q.root not in AM_SETTLED_ROOTS:
+            counts[q.root] = counts.get(q.root, 0) + 1
     if not counts:
         return ""
-    return max(counts, key=lambda r: (r not in AM_SETTLED_ROOTS, counts[r]))
+    return max(counts, key=lambda r: counts[r])
 
 
-def has_two_sided_quotes(quotes: Sequence[Quote]) -> bool:
-    return any(q.bid > 0 and q.ask > 0 for q in quotes)
+def has_live_quotes(quotes: Sequence[Quote]) -> bool:
+    """Any bid or ask at all. Outside market hours every one is zero."""
+    return any(q.bid > 0 or q.ask > 0 for q in quotes)
 
 
 def _two_sided_pairs(quotes: Sequence[Quote]) -> List[Tuple[Quote, Quote]]:
@@ -233,11 +246,11 @@ def find_credit_spreads(
     for short in by_strike.values():
         if not min_delta <= abs(short.delta) <= max_delta:
             continue
-        if short.bid <= 0 or short.volume < min_volume:
+        if short.bid <= 0 or short.crossed or short.volume < min_volume:
             continue
         for width in widths:
             long = by_strike.get(short.strike + direction * width)
-            if long is None or long.ask <= 0 or long.volume < min_volume:
+            if long is None or long.ask <= 0 or long.crossed or long.volume < min_volume:
                 continue
             spread = CreditSpread(side=side, short=short, long=long)
             if spread.credit >= min_credit and spread.max_loss > 0:
@@ -273,8 +286,15 @@ def scan(
     min_credit: float = 0.50,
     min_volume: int = 0,
 ) -> Dict[str, Any]:
-    """Run the full scan over raw chain rows."""
+    """Run the full scan over raw chain rows.
+
+    Raises ValueError if ``expiry`` is omitted and the rows span several
+    expirations, since spreads must not pair contracts from different dates.
+    """
     quotes = parse_contracts(rows, expiry=expiry)
+    expiries = {q.expiry for q in quotes}
+    if len(expiries) > 1:
+        raise ValueError(f"rows span {len(expiries)} expirations; pass expiry=")
     root = pick_root(quotes)
     quotes = [q for q in quotes if q.root == root]
     kwargs = dict(widths=widths, min_delta=min_delta, max_delta=max_delta,
@@ -297,9 +317,10 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
     lines = []
     forward, move = result["forward"], result["expected_move"]
     if not result["quotes"]:
-        return "  No contracts in the chain — nothing to scan."
-    if not has_two_sided_quotes(result["quotes"]):
-        return (f"  {len(result['quotes'])} contracts but none has both a bid and an ask."
+        return ("  No same-day PM-settled contracts in the chain — nothing to scan."
+                "\n  (AM-settled index options settled at this morning's open.)")
+    if not has_live_quotes(result["quotes"]):
+        return (f"  {len(result['quotes'])} contracts but none has a bid or an ask."
                 "\n  The market is probably closed: same-day contracts trade"
                 " 9:30-16:00 ET.")
     root = result.get("root") or "-"
@@ -341,8 +362,8 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             call = f"{c.call.short.strike:.0f}/{c.call.long.strike:.0f}"
             lines.append(f"  {put:>13} {call:>13} {c.width:>4.0f} {c.credit:>7.2f}"
                          f" {c.max_loss:>8.2f} {c.return_on_risk:>6.1%} {c.pop:>6.1%}")
-    lines.append("\n  Credit = sell at bid, buy at ask. POP and Δ are risk-neutral"
-                 " (from chain deltas).\n  Dist = short strike distance in priced"
+    lines.append("\n  Credit = sell at bid, buy at ask. POP = 1 - |Δ| of the short"
+                 " strike (delta proxy).\n  Dist = short strike distance in priced"
                  " moves. Research only — no orders are placed.")
     return "\n".join(lines)
 
@@ -356,6 +377,9 @@ def save_chart(result: Dict[str, Any], path: str, title: str = "") -> None:
     ink, muted, grid, surface = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
     put_color, call_color = "#2a78d6", "#eb6834"
     forward, move = result["forward"], result["expected_move"]
+    if forward is None or move is None:
+        raise ValueError("cannot chart a scan without a forward and priced move"
+                         " (no quoted call/put pair at a common strike)")
     quotes = [q for q in result["quotes"] if abs(q.strike - forward) <= 4 * move]
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 9), facecolor=surface)
