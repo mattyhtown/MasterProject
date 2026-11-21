@@ -176,3 +176,10 @@ class TestOptionContractsPagination:
         with patch.object(client, "get", return_value=full):
             with pytest.raises(UnusualWhalesError, match="partial chain"):
                 client.option_contracts("SPX", "2026-11-16", page_size=2, max_pages=3)
+
+    def test_page_size_above_endpoint_cap_is_rejected(self):
+        client = UnusualWhalesClient(_cfg())
+        with patch.object(client, "get") as mock_get:
+            with pytest.raises(ValueError, match="1-500"):
+                client.option_contracts("SPX", "2026-11-16", page_size=501)
+            mock_get.assert_not_called()

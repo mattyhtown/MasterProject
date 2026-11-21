@@ -14,6 +14,7 @@ a screening heuristic (return on risk x probability of keeping the credit),
 not a claim of edge.
 """
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
@@ -25,7 +26,17 @@ DEFAULT_WIDTHS = (10.0, 25.0, 50.0)
 # Index option roots that settle on the next morning's opening print (AM).
 # Their PM-settled siblings (SPXW, NDXP, RUTW, ...) are what a same-day
 # intraday scan wants.
-AM_SETTLED_ROOTS = frozenset({"SPX", "NDX", "RUT", "DJX", "MXEA", "MXEF"})
+AM_SETTLED_ROOTS = frozenset({"SPX", "NDX", "RUT", "DJX", "MXEA", "MXEF", "VIX", "VIXW"})
+
+
+def _ticks(strike: float) -> int:
+    """Strike in OCC thousandths of a point, for exact matching."""
+    return int(round(strike * 1000))
+
+
+def fmt_strike(strike: float) -> str:
+    """Strike as listed: no decimals for whole strikes, otherwise exact."""
+    return f"{strike:.0f}" if strike == int(strike) else f"{strike:g}"
 
 
 @dataclass(frozen=True)
@@ -67,8 +78,8 @@ class CreditSpread:
 
     @property
     def credit(self) -> float:
-        """Natural credit: sell at the bid, buy at the ask."""
-        return self.short.bid - self.long.ask
+        """Natural credit: sell at the bid, buy at the ask (rounded to cents)."""
+        return round(self.short.bid - self.long.ask, 2)
 
     @property
     def credit_mid(self) -> float:
@@ -76,7 +87,7 @@ class CreditSpread:
 
     @property
     def max_loss(self) -> float:
-        return self.width - self.credit
+        return round(self.width - self.credit, 2)
 
     @property
     def return_on_risk(self) -> float:
@@ -111,11 +122,11 @@ class IronCondor:
 
     @property
     def credit(self) -> float:
-        return self.put.credit + self.call.credit
+        return round(self.put.credit + self.call.credit, 2)
 
     @property
     def max_loss(self) -> float:
-        return self.width - self.credit
+        return round(self.width - self.credit, 2)
 
     @property
     def return_on_risk(self) -> float:
@@ -142,10 +153,12 @@ def parse_occ(symbol: str) -> Optional[Tuple[str, str, str, float]]:
 
 
 def _num(value: Any) -> float:
+    """Feed number as a float; missing, malformed, NaN or infinite becomes 0."""
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return 0.0
+    return number if math.isfinite(number) else 0.0
 
 
 def parse_contracts(rows: Iterable[Dict[str, Any]], expiry: str = "") -> List[Quote]:
@@ -185,12 +198,16 @@ def pick_root(quotes: Sequence[Quote]) -> str:
     rest, the root with the most contracts wins; "" if none is eligible.
     """
     counts: Dict[str, int] = {}
+    live: Dict[str, int] = {}
     for q in quotes:
         if q.root not in AM_SETTLED_ROOTS:
             counts[q.root] = counts.get(q.root, 0) + 1
+            if q.bid > 0 or q.ask > 0:
+                live[q.root] = live.get(q.root, 0) + 1
     if not counts:
         return ""
-    return max(counts, key=lambda r: counts[r])
+    # A series with live quotes beats a larger one that has none.
+    return max(counts, key=lambda r: (live.get(r, 0) > 0, counts[r]))
 
 
 def has_live_quotes(quotes: Sequence[Quote]) -> bool:
@@ -204,27 +221,47 @@ def _two_sided_pairs(quotes: Sequence[Quote]) -> List[Tuple[Quote, Quote]]:
     pairs = []
     for strike in sorted(set(calls) & set(puts)):
         call, put = calls[strike], puts[strike]
-        if call.bid > 0 and put.bid > 0 and call.ask > 0 and put.ask > 0:
+        if (call.bid > 0 and put.bid > 0 and call.ask > 0 and put.ask > 0
+                and not call.crossed and not put.crossed):
             pairs.append((call, put))
     return pairs
 
 
-def implied_forward(quotes: Sequence[Quote]) -> Optional[float]:
-    """Forward price from put-call parity at the strike nearest the money."""
+def _atm_pair(quotes: Sequence[Quote]) -> Optional[Tuple[Quote, Quote]]:
     pairs = _two_sided_pairs(quotes)
     if not pairs:
         return None
-    call, put = min(pairs, key=lambda cp: abs(cp[0].mid - cp[1].mid))
-    return call.strike + call.mid - put.mid
+    return min(pairs, key=lambda cp: abs(cp[0].mid - cp[1].mid))
+
+
+def implied_forward(quotes: Sequence[Quote]) -> Optional[float]:
+    """Forward price from put-call parity at the strike nearest the money.
+
+    None if no clean call/put pair is quoted or the result is not positive.
+    """
+    pair = _atm_pair(quotes)
+    if pair is None:
+        return None
+    call, put = pair
+    forward = call.strike + call.mid - put.mid
+    return forward if math.isfinite(forward) and forward > 0 else None
 
 
 def expected_move(quotes: Sequence[Quote]) -> Optional[float]:
-    """At-the-money straddle mid: the market's priced move into the close."""
-    pairs = _two_sided_pairs(quotes)
-    if not pairs:
+    """At-the-money straddle mid: the market's priced move into the close.
+
+    None when the nearest quoted pair is so far from the forward that
+    intrinsic value, not time value, would make up most of the straddle.
+    """
+    pair = _atm_pair(quotes)
+    forward = implied_forward(quotes)
+    if pair is None or forward is None:
         return None
-    call, put = min(pairs, key=lambda cp: abs(cp[0].mid - cp[1].mid))
-    return call.mid + put.mid
+    call, put = pair
+    straddle = call.mid + put.mid
+    if abs(call.strike - forward) > straddle / 2:
+        return None
+    return straddle
 
 
 def find_credit_spreads(
@@ -241,7 +278,9 @@ def find_credit_spreads(
         raise ValueError("side must be 'put' or 'call'")
     right = "P" if side == "put" else "C"
     direction = -1.0 if side == "put" else 1.0
-    by_strike = {q.strike: q for q in quotes if q.right == right}
+    if not all(0 < w for w in widths):
+        raise ValueError("widths must be positive")
+    by_strike = {_ticks(q.strike): q for q in quotes if q.right == right}
     spreads = []
     for short in by_strike.values():
         if not min_delta <= abs(short.delta) <= max_delta:
@@ -249,7 +288,7 @@ def find_credit_spreads(
         if short.bid <= 0 or short.crossed or short.volume < min_volume:
             continue
         for width in widths:
-            long = by_strike.get(short.strike + direction * width)
+            long = by_strike.get(_ticks(short.strike) + int(direction) * _ticks(width))
             if long is None or long.ask <= 0 or long.crossed or long.volume < min_volume:
                 continue
             spread = CreditSpread(side=side, short=short, long=long)
@@ -267,8 +306,10 @@ def find_iron_condors(
     condors = []
     for put in put_spreads:
         for call in call_spreads:
-            if put.width != call.width:
+            if _ticks(put.width) != _ticks(call.width):
                 continue
+            if put.short.strike >= call.short.strike:
+                continue  # overlapping wings could both lose
             if abs(abs(put.short.delta) - abs(call.short.delta)) > max_delta_gap:
                 continue
             condor = IronCondor(put=put, call=call)
@@ -346,7 +387,8 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             else:
                 dist_txt = f"{'n/a':>6}"
             lines.append(
-                f"  {s.short.strike:>7.0f} {s.long.strike:>7.0f} {s.width:>4.0f}"
+                f"  {fmt_strike(s.short.strike):>7} {fmt_strike(s.long.strike):>7}"
+                f" {fmt_strike(s.width):>4}"
                 f" {abs(s.short.delta):>6.2f} {s.credit:>7.2f} {s.max_loss:>8.2f}"
                 f" {s.return_on_risk:>6.1%} {s.pop:>6.1%} {dist_txt}"
                 f" {s.short.volume:>7,}")
@@ -358,9 +400,9 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
         lines.append(f"  {'Put':>13} {'Call':>13} {'Wid':>4} {'Credit':>7}"
                      f" {'MaxLoss':>8} {'RoR':>6} {'POP':>6}")
         for c in condors:
-            put = f"{c.put.long.strike:.0f}/{c.put.short.strike:.0f}"
-            call = f"{c.call.short.strike:.0f}/{c.call.long.strike:.0f}"
-            lines.append(f"  {put:>13} {call:>13} {c.width:>4.0f} {c.credit:>7.2f}"
+            put = f"{fmt_strike(c.put.long.strike)}/{fmt_strike(c.put.short.strike)}"
+            call = f"{fmt_strike(c.call.short.strike)}/{fmt_strike(c.call.long.strike)}"
+            lines.append(f"  {put:>13} {call:>13} {fmt_strike(c.width):>4} {c.credit:>7.2f}"
                          f" {c.max_loss:>8.2f} {c.return_on_risk:>6.1%} {c.pop:>6.1%}")
     lines.append("\n  Credit = sell at bid, buy at ask. POP = 1 - |Δ| of the short"
                  " strike (delta proxy).\n  Dist = short strike distance in priced"
@@ -408,7 +450,7 @@ def save_chart(result: Dict[str, Any], path: str, title: str = "") -> None:
         if result[key]:
             best = result[key][0]
             ax1.axvline(best.short.strike, color=color, linewidth=1.5, linestyle="--")
-            ax1.text(best.short.strike, top * 0.8, f" top short {best.short.strike:.0f}",
+            ax1.text(best.short.strike, top * 0.8, f" top short {fmt_strike(best.short.strike)}",
                      color=ink, fontsize=9)
     ax1.set_title(title or "0DTE volume by strike", loc="left", color=ink,
                   fontsize=12, fontweight="bold")
@@ -424,13 +466,13 @@ def save_chart(result: Dict[str, Any], path: str, title: str = "") -> None:
                     s=45, color=color, edgecolor=surface, linewidth=1, label=label)
         if spreads:
             best = spreads[0]
-            ax2.annotate(f"{best.short.strike:.0f}/{best.long.strike:.0f}",
+            ax2.annotate(f"{fmt_strike(best.short.strike)}/{fmt_strike(best.long.strike)}",
                          (best.pop * 100, best.return_on_risk * 100),
                          textcoords="offset points", xytext=(8, 6),
                          color=ink, fontsize=9)
     ax2.set_title("Candidates: chance of keeping the credit vs return on risk",
                   loc="left", color=ink, fontsize=12, fontweight="bold")
-    ax2.set_xlabel("Risk-neutral chance short strike expires out of the money (%)",
+    ax2.set_xlabel("POP: 1 - |delta| of the short strike (%), a delta proxy",
                    color=muted)
     ax2.set_ylabel("Return on risk at natural prices (%)", color=muted)
     ax2.legend(frameon=False, labelcolor=ink)

@@ -1096,17 +1096,37 @@ def main() -> None:
         from .agents import zero_dte_finder as finder
         from .data.unusual_whales import UnusualWhalesClient, UnusualWhalesError
 
+        find_usage = "usage: python -m apex_sharpe 0dte-find [TICKER] [--chart PATH]"
         args = sys.argv[2:]
         chart_path = ""
-        if "--chart" in args:
-            idx = args.index("--chart")
-            chart_path = args[idx + 1] if idx + 1 < len(args) else "0dte_find.png"
-            args = args[:idx] + args[idx + 2:]
-        ticker = args[0].upper() if args else "SPX"
+        positionals = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg in ("-h", "--help"):
+                print(find_usage)
+                sys.exit(0)
+            if arg == "--chart":
+                if i + 1 >= len(args) or args[i + 1].startswith("-"):
+                    print(f"  [ERROR] --chart needs a file path\n{find_usage}")
+                    sys.exit(2)
+                chart_path = args[i + 1]
+                i += 2
+                continue
+            if arg.startswith("-"):
+                print(f"  [ERROR] unknown option {arg}\n{find_usage}")
+                sys.exit(2)
+            positionals.append(arg)
+            i += 1
+        if len(positionals) > 1:
+            print(f"  [ERROR] expected at most one ticker\n{find_usage}")
+            sys.exit(2)
+        ticker = positionals[0].upper() if positionals else "SPX"
         now = datetime.now(ZoneInfo("America/New_York"))
         expiry = now.strftime("%Y-%m-%d")
         print(f"  0DTE finder — {ticker} expiring {expiry}"
-              f" (as of {now:%H:%M} ET) — research only, no orders")
+              f" (scan started {now:%H:%M} ET; quotes are as delivered by the"
+              " feed, which may lag) — research only, no orders")
         try:
             uw = UnusualWhalesClient(config.unusual_whales)
             rows = uw.option_contracts(ticker, expiry)

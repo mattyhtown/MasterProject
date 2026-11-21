@@ -111,6 +111,8 @@ class UnusualWhalesClient:
         UnusualWhalesError if a page is malformed or the chain is longer than
         ``max_pages`` pages, rather than returning a partial chain.
         """
+        if not 0 < page_size <= 500:
+            raise ValueError("page_size must be 1-500 (the endpoint's cap)")
         by_symbol: dict = {}
         unkeyed: list = []
         for page in range(max_pages):

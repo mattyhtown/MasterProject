@@ -155,3 +155,84 @@ def test_save_chart_rejects_result_without_forward(tmp_path):
     result = f.scan(rows, expiry="2026-11-16", widths=(25,))
     with pytest.raises(ValueError, match="forward"):
         f.save_chart(result, str(tmp_path / "x.png"))
+
+
+def test_non_finite_feed_numbers_are_treated_as_missing():
+    row = _row("P", 6975, 2.0, 2.2, -0.15)
+    row.update(volume="NaN", open_interest="Infinity", nbbo_ask="inf")
+    (q,) = f.parse_contracts([row])
+    assert (q.volume, q.open_interest, q.ask) == (0, 0, 0.0)
+
+
+def test_fractional_strikes_match_exactly_and_print_exactly():
+    # 16.10 - 10 is not exactly 6.10 in floating point.
+    rows = [_row("P", 16.1, 2.0, 2.1, -0.15), _row("P", 6.1, 0.2, 0.3, -0.02),
+            _row("P", 590.5, 2.0, 2.1, -0.15), _row("P", 580.5, 0.2, 0.3, -0.02)]
+    result = f.scan(rows, expiry="2026-11-16", widths=(10,), min_credit=0.5)
+    shorts = {s.short.strike for s in result["put_spreads"]}
+    assert shorts == {16.1, 590.5}
+    report = f.format_report(result)
+    assert "590.5" in report and "580.5" in report and "16.1" in report
+
+
+def test_crossed_pair_does_not_set_forward_or_move():
+    rows = [_row("C", 7000, 11.8, 12.2, 0.5), _row("P", 7000, 9.8, 10.2, -0.5),
+            _row("C", 7010, 27.0, 3.0, 0.4), _row("P", 7010, 14.8, 15.2, -0.6)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7002.0)
+    assert result["expected_move"] == pytest.approx(22.0)
+
+
+def test_far_strike_straddle_is_not_reported_as_move():
+    rows = [_row("C", 6950, 50.4, 50.6, 0.99), _row("P", 6950, 0.1, 0.2, -0.01)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7000.35)
+    assert result["expected_move"] is None
+
+
+def test_non_positive_forward_is_unavailable_and_report_still_renders():
+    rows = [_row("C", 100, 1.4, 1.6, 0.5), _row("P", 100, 101.4, 101.6, -0.5)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] is None
+    f.format_report(result)  # must not raise ZeroDivisionError
+
+
+def test_condor_never_pairs_overlapping_short_strikes():
+    put = f.CreditSpread("put", f.Quote(7010, "P", 6, 6.2, -0.15, .2, 1, 1),
+                         f.Quote(7000, "P", 1, 1.2, -0.1, .2, 1, 1))
+    call = f.CreditSpread("call", f.Quote(6990, "C", 6, 6.2, 0.15, .2, 1, 1),
+                          f.Quote(7000, "C", 1, 1.2, 0.1, .2, 1, 1))
+    assert f.find_iron_condors([put], [call]) == []
+
+
+def test_credits_are_priced_in_cents():
+    # 40.30 - 30.30 must equal the 10-point width exactly (zero max loss, so
+    # excluded), and 0.70 - 0.20 must meet a 0.50 minimum.
+    rows = [_row("P", 7000, 40.30, 40.5, -0.15), _row("P", 6990, 30.0, 30.30, -0.1),
+            _row("P", 6900, 0.70, 0.8, -0.15), _row("P", 6890, 0.1, 0.20, -0.1)]
+    result = f.scan(rows, expiry="2026-11-16", widths=(10,), min_credit=0.5)
+    shorts = [s.short.strike for s in result["put_spreads"]]
+    assert shorts == [6900]
+    assert result["put_spreads"][0].credit == 0.5
+
+
+def test_live_series_beats_larger_unquoted_series():
+    rows = [_row("C", 7000, 0, 0, 0.5, root="XSP"), _row("P", 7000, 0, 0, -0.5, root="XSP"),
+            _row("C", 7010, 0, 0, 0.4, root="XSP"),
+            _row("C", 7000, 11.8, 12.2, 0.5), _row("P", 7000, 9.8, 10.2, -0.5)]
+    assert f.pick_root(f.parse_contracts(rows)) == "SPXW"
+
+
+def test_vix_options_are_treated_as_am_settled():
+    rows = [_row("C", 20, 1, 1.1, 0.5, root="VIX"), _row("C", 20, 1, 1.1, 0.5, root="VIXW")]
+    assert f.pick_root(f.parse_contracts(rows)) == ""
+
+
+def test_spreads_are_ranked_by_score_not_strike():
+    rows = [_row("P", 7000, 3.0, 3.1, -0.20), _row("P", 6990, 1.0, 1.1, -0.12),
+            _row("P", 6980, 0.9, 1.0, -0.10), _row("P", 6970, 0.1, 0.2, -0.06)]
+    spreads = f.find_credit_spreads(f.parse_contracts(rows), "put", widths=(10,),
+                                    min_credit=0.5)
+    scores = [s.score for s in spreads]
+    assert len(spreads) == 2 and scores == sorted(scores, reverse=True)
+    assert [s.short.strike for s in spreads] == [7000, 6980]
