@@ -48,6 +48,7 @@ Usage:
     python -m apex_sharpe signal-analysis — 20 signals × 5 regimes backtest analysis
     python -m apex_sharpe chain-ingest    — Intraday chain snapshots to Supabase
     python -m apex_sharpe uw-flow         — Unusual Whales flow alerts (research/paper only)
+    python -m apex_sharpe 0dte-find       — Rank same-day SPX credit spreads / iron condors
 """
 
 import sys
@@ -119,6 +120,7 @@ Interactive Brokers:
 
 Research data (paper only):
   uw-flow         Unusual Whales flow alerts [ticker] [limit]
+  0dte-find       Rank same-day credit spreads / iron condors [ticker] [--chart PATH]
 """
 
 
@@ -1086,6 +1088,86 @@ def main() -> None:
                   f" {str(prem):>12}"
                   f" {str(size):>8}"
                   f" {chain}")
+
+    elif mode in ("0dte-find", "0dte_find"):
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from .agents import zero_dte_finder as finder
+        from .data.unusual_whales import UnusualWhalesClient, UnusualWhalesError
+
+        find_usage = "usage: python -m apex_sharpe 0dte-find [TICKER] [--chart PATH]"
+        args = sys.argv[2:]
+        chart_path = ""
+        positionals = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg in ("-h", "--help"):
+                print(find_usage)
+                sys.exit(0)
+            if arg == "--chart":
+                if chart_path:
+                    print(f"  [ERROR] --chart given more than once\n{find_usage}")
+                    sys.exit(2)
+                if (i + 1 >= len(args) or args[i + 1].startswith("-")
+                        or not args[i + 1].strip()):
+                    print(f"  [ERROR] --chart needs a file path\n{find_usage}")
+                    sys.exit(2)
+                chart_path = args[i + 1]
+                i += 2
+                continue
+            if arg.startswith("-"):
+                print(f"  [ERROR] unknown option {arg}\n{find_usage}")
+                sys.exit(2)
+            positionals.append(arg)
+            i += 1
+        if chart_path:
+            try:
+                finder.chart_path_for(chart_path)
+            except ValueError as exc:
+                print(f"  [ERROR] {exc}\n{find_usage}")
+                sys.exit(2)
+        if len(positionals) > 1:
+            print(f"  [ERROR] expected at most one ticker\n{find_usage}")
+            sys.exit(2)
+        ticker = positionals[0].upper() if positionals else "SPX"
+        now = datetime.now(ZoneInfo("America/New_York"))
+        expiry = now.strftime("%Y-%m-%d")
+        print(f"  0DTE finder — {ticker} expiring {expiry}"
+              f" (scan started {now:%H:%M} ET; quotes are as delivered by the"
+              " feed, which may lag) — research only, no orders")
+        try:
+            uw = UnusualWhalesClient(config.unusual_whales)
+            rows = uw.option_contracts(ticker, expiry)
+        except UnusualWhalesError as exc:
+            print(f"  [ERROR] {exc}")
+            sys.exit(1)
+        if not rows:
+            print(f"  No {ticker} contracts expire today ({expiry}).")
+            if chart_path:
+                print("  No chart written: there is no chain to plot.")
+            sys.exit(0)
+        result = finder.scan(rows, expiry=expiry)
+        print(finder.format_report(result))
+        if chart_path:
+            if result["forward"] is None:
+                print("\n  No chart written: no clean call/put pair gave a valid positive forward,"
+                      " so there is no forward to centre it on.")
+            elif result["expected_move"] is None:
+                print("\n  No chart written: the priced move is unavailable (no straddle"
+                      " near the forward was quoted tightly and consistently enough).")
+            else:
+                try:
+                    written = finder.save_chart(
+                        result, chart_path,
+                        title=f"{ticker} 0DTE volume by strike — {expiry} {now:%H:%M} ET")
+                    print(f"\n  Chart saved to {written}")
+                except ImportError:
+                    print("\n  No chart written: matplotlib is not installed")
+                except (OSError, ValueError) as exc:
+                    print(f"\n  [ERROR] chart not written: {exc}")
+                    sys.exit(1)
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

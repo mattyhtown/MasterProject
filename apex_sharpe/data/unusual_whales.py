@@ -97,3 +97,51 @@ class UnusualWhalesClient:
     def option_trades(self, **params: Any) -> Dict[str, Any]:
         """GET /api/option-trades with query-param passthrough."""
         return self.get("/api/option-trades", params)
+
+    def option_contracts(self, ticker: str, expiry: str, page_size: int = 500,
+                         max_pages: int = 10) -> list:
+        """All option contracts for one expiry, following pagination.
+
+        The endpoint returns at most 500 rows per page, ordered by volume, and
+        volume changes between page requests during the session. A contract can
+        therefore appear on two pages; each symbol is kept once, from the
+        latest page that returned it.
+
+        Pages are numbered from 0 (an omitted ``page`` is page 0). Raises
+        UnusualWhalesError if a page or row is malformed, or if the chain is
+        longer than ``max_pages`` pages, rather than returning a partial chain.
+        When the last allowed page is full, one extra page is requested to
+        confirm the chain ended there.
+        """
+        if not 0 < page_size <= 500:
+            raise ValueError("page_size must be 1-500 (the endpoint's cap)")
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
+        by_symbol: dict = {}
+        for page in range(max_pages + 1):
+            payload = self.get(
+                f"/api/stock/{ticker}/option-contracts",
+                {"expiry": expiry, "limit": page_size, "page": page},
+            )
+            batch = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(batch, list):
+                raise UnusualWhalesError(
+                    f"Unusual Whales option-contracts page {page} for {ticker} {expiry}"
+                    " has no 'data' list")
+            if page == max_pages:
+                if batch:
+                    break  # the probe page has rows: the chain is too long
+                return list(by_symbol.values())
+            for i, row in enumerate(batch):
+                symbol = row.get("option_symbol") if isinstance(row, dict) else None
+                if (not isinstance(symbol, str) or not symbol.strip()
+                        or symbol != symbol.strip()):
+                    raise UnusualWhalesError(
+                        f"Unusual Whales option-contracts page {page} row {i} for"
+                        f" {ticker} {expiry} has no option_symbol string")
+                by_symbol[symbol] = row
+            if len(batch) < page_size:
+                return list(by_symbol.values())
+        raise UnusualWhalesError(
+            f"{ticker} {expiry} chain is longer than {max_pages} pages of {page_size};"
+            " refusing to rank a partial chain")
