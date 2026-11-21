@@ -236,3 +236,22 @@ def test_spreads_are_ranked_by_score_not_strike():
     scores = [s.score for s in spreads]
     assert len(spreads) == 2 and scores == sorted(scores, reverse=True)
     assert [s.short.strike for s in spreads] == [7000, 6980]
+
+
+def test_condor_delta_gap_boundary_is_inclusive():
+    put = f.CreditSpread("put", f.Quote(6950, "P", 2, 2.1, -0.15, .2, 1, 1),
+                         f.Quote(6940, "P", 1, 1.1, -0.1, .2, 1, 1))
+    call = f.CreditSpread("call", f.Quote(7050, "C", 2, 2.1, 0.20, .2, 1, 1),
+                          f.Quote(7060, "C", 1, 1.1, 0.1, .2, 1, 1))
+    assert len(f.find_iron_condors([put], [call])) == 1  # |0.20 - 0.15| == 0.05
+
+
+def test_save_chart_writes_png_and_adds_suffix(tmp_path):
+    pytest.importorskip("matplotlib")
+    result = f.scan(CHAIN[:-1], expiry="2026-11-16", widths=(25,))
+    written = f.save_chart(result, str(tmp_path / "report"))
+    assert written.endswith("report.png")
+    with open(written, "rb") as fh:
+        assert fh.read(8) == b"\x89PNG\r\n\x1a\n"
+    with pytest.raises(ValueError, match=".png"):
+        f.save_chart(result, str(tmp_path / "report.jpg"))

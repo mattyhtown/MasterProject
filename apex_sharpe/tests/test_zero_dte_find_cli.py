@@ -13,6 +13,7 @@ from apex_sharpe import cli
     (["0dte-find", "--chart", "--bogus"], 2),       # option where path expected
     (["0dte-find", "--bogus"], 2),                  # unknown option
     (["0dte-find", "SPX", "QQQ"], 2),               # extra positional
+    (["0dte-find", "--chart", "out.jpg"], 2),       # chart must be PNG
     (["0dte-find", "--help"], 0),
 ])
 def test_bad_or_help_arguments_exit_before_fetching(argv, code):

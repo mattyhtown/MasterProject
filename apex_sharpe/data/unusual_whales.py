@@ -108,14 +108,15 @@ class UnusualWhalesClient:
         latest page that returned it.
 
         Pages are numbered from 0 (an omitted ``page`` is page 0). Raises
-        UnusualWhalesError if a page is malformed or the chain is longer than
-        ``max_pages`` pages, rather than returning a partial chain.
+        UnusualWhalesError if a page or row is malformed, or if the chain is
+        longer than ``max_pages`` pages, rather than returning a partial chain.
+        When the last allowed page is full, one extra page is requested to
+        confirm the chain ended there.
         """
         if not 0 < page_size <= 500:
             raise ValueError("page_size must be 1-500 (the endpoint's cap)")
         by_symbol: dict = {}
-        unkeyed: list = []
-        for page in range(max_pages):
+        for page in range(max_pages + 1):
             payload = self.get(
                 f"/api/stock/{ticker}/option-contracts",
                 {"expiry": expiry, "limit": page_size, "page": page},
@@ -125,14 +126,19 @@ class UnusualWhalesClient:
                 raise UnusualWhalesError(
                     f"Unusual Whales option-contracts page {page} for {ticker} {expiry}"
                     " has no 'data' list")
-            for row in batch:
+            if page == max_pages:
+                if batch:
+                    break  # the probe page has rows: the chain is too long
+                return list(by_symbol.values())
+            for i, row in enumerate(batch):
                 symbol = row.get("option_symbol") if isinstance(row, dict) else None
-                if symbol:
-                    by_symbol[symbol] = row
-                else:
-                    unkeyed.append(row)
+                if not isinstance(symbol, str) or not symbol:
+                    raise UnusualWhalesError(
+                        f"Unusual Whales option-contracts page {page} row {i} for"
+                        f" {ticker} {expiry} has no option_symbol string")
+                by_symbol[symbol] = row
             if len(batch) < page_size:
-                return list(by_symbol.values()) + unkeyed
+                return list(by_symbol.values())
         raise UnusualWhalesError(
             f"{ticker} {expiry} chain is longer than {max_pages} pages of {page_size};"
             " refusing to rank a partial chain")

@@ -1118,6 +1118,12 @@ def main() -> None:
                 sys.exit(2)
             positionals.append(arg)
             i += 1
+        if chart_path:
+            try:
+                finder.chart_path_for(chart_path)
+            except ValueError as exc:
+                print(f"  [ERROR] {exc}\n{find_usage}")
+                sys.exit(2)
         if len(positionals) > 1:
             print(f"  [ERROR] expected at most one ticker\n{find_usage}")
             sys.exit(2)
@@ -1135,17 +1141,26 @@ def main() -> None:
             sys.exit(1)
         if not rows:
             print(f"  No {ticker} contracts expire today ({expiry}).")
+            if chart_path:
+                print("  No chart written: there is no chain to plot.")
             sys.exit(0)
         result = finder.scan(rows, expiry=expiry)
         print(finder.format_report(result))
-        if chart_path and result["forward"] is not None:
-            try:
-                finder.save_chart(
-                    result, chart_path,
-                    title=f"{ticker} 0DTE volume by strike — {expiry} {now:%H:%M} ET")
-                print(f"\n  Chart saved to {chart_path}")
-            except ImportError:
-                print("\n  Chart skipped: matplotlib is not installed")
+        if chart_path:
+            if result["forward"] is None or result["expected_move"] is None:
+                print("\n  No chart written: it needs a forward and priced move,"
+                      " and no quoted call/put pair near the money was found.")
+            else:
+                try:
+                    written = finder.save_chart(
+                        result, chart_path,
+                        title=f"{ticker} 0DTE volume by strike — {expiry} {now:%H:%M} ET")
+                    print(f"\n  Chart saved to {written}")
+                except ImportError:
+                    print("\n  No chart written: matplotlib is not installed")
+                except (OSError, ValueError) as exc:
+                    print(f"\n  [ERROR] chart not written: {exc}")
+                    sys.exit(1)
 
     else:
         print(f"Unknown mode: {mode}\n{USAGE}")

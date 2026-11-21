@@ -310,7 +310,7 @@ def find_iron_condors(
                 continue
             if put.short.strike >= call.short.strike:
                 continue  # overlapping wings could both lose
-            if abs(abs(put.short.delta) - abs(call.short.delta)) > max_delta_gap:
+            if abs(abs(put.short.delta) - abs(call.short.delta)) > max_delta_gap + 1e-9:
                 continue
             condor = IronCondor(put=put, call=call)
             if condor.max_loss > 0:
@@ -404,20 +404,36 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
             call = f"{fmt_strike(c.call.short.strike)}/{fmt_strike(c.call.long.strike)}"
             lines.append(f"  {put:>13} {call:>13} {fmt_strike(c.width):>4} {c.credit:>7.2f}"
                          f" {c.max_loss:>8.2f} {c.return_on_risk:>6.1%} {c.pop:>6.1%}")
-    lines.append("\n  Credit = sell at bid, buy at ask. POP = 1 - |Δ| of the short"
-                 " strike (delta proxy).\n  Dist = short strike distance in priced"
+    lines.append("\n  Credit = sell at bid, buy at ask. POP is a delta proxy:"
+                 " spreads 1 - |Δ short|; condors 1 - |Δ short put| - |Δ short call|."
+                 "\n  Dist = short strike distance in priced"
                  " moves. Research only — no orders are placed.")
     return "\n".join(lines)
 
 
-def save_chart(result: Dict[str, Any], path: str, title: str = "") -> None:
-    """Write a two-panel PNG: volume by strike, and the candidate trade-off."""
+def chart_path_for(path: str) -> str:
+    """The PNG path a chart will be written to: adds .png, rejects other formats."""
+    import os
+    root, ext = os.path.splitext(path)
+    if not ext:
+        return path + ".png"
+    if ext.lower() != ".png":
+        raise ValueError(f"chart path must end in .png (got {ext})")
+    return path
+
+
+def save_chart(result: Dict[str, Any], path: str, title: str = "") -> str:
+    """Write a two-panel PNG: volume by strike, and the candidate trade-off.
+
+    Returns the path written (``.png`` is added when ``path`` has no suffix).
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     ink, muted, grid, surface = "#0b0b0b", "#898781", "#e1e0d9", "#fcfcfb"
     put_color, call_color = "#2a78d6", "#eb6834"
+    chart_path_for(path)  # fail on a bad path before any plotting
     forward, move = result["forward"], result["expected_move"]
     if forward is None or move is None:
         raise ValueError("cannot chart a scan without a forward and priced move"
@@ -478,5 +494,9 @@ def save_chart(result: Dict[str, Any], path: str, title: str = "") -> None:
     ax2.legend(frameon=False, labelcolor=ink)
 
     fig.tight_layout()
-    fig.savefig(path, dpi=160, facecolor=surface)
-    plt.close(fig)
+    out = chart_path_for(path)
+    try:
+        fig.savefig(out, dpi=160, facecolor=surface, format="png")
+    finally:
+        plt.close(fig)
+    return out

@@ -15,6 +15,12 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install test dependencies
-        run: python -m pip install --upgrade pip && pip install "pytest>=8.0.0"
+        run: python -m pip install --upgrade pip && pip install "pytest>=8.0.0" "matplotlib>=3.7"
       - name: Run historian and edge-graduation tests
         run: python -m pytest tests/test_edge_governance.py -q --tb=short
+      - name: Run 0DTE finder and Unusual Whales client tests
+        run: >-
+          python -m pytest -q --tb=short
+          apex_sharpe/tests/test_zero_dte_finder.py
+          apex_sharpe/tests/test_zero_dte_find_cli.py
+          apex_sharpe/tests/test_unusual_whales.py

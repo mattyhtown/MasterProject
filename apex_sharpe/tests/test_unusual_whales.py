@@ -153,6 +153,8 @@ class TestOptionContractsPagination:
         requested = []
 
         def fake_get(path, params):
+            assert path == "/api/stock/SPX/option-contracts"
+            assert params["expiry"] == "2026-11-16" and params["limit"] == 3
             requested.append(params["page"])
             return by_page[params["page"]]
 
@@ -183,3 +185,20 @@ class TestOptionContractsPagination:
             with pytest.raises(ValueError, match="1-500"):
                 client.option_contracts("SPX", "2026-11-16", page_size=501)
             mock_get.assert_not_called()
+
+    def test_chain_exactly_filling_page_budget_is_complete(self):
+        client = UnusualWhalesClient(_cfg())
+        pages = {0: {"data": [{"option_symbol": "A"}, {"option_symbol": "B"}]},
+                 1: {"data": [{"option_symbol": "C"}, {"option_symbol": "D"}]},
+                 2: {"data": []}}
+        with patch.object(client, "get", side_effect=lambda p, q: pages[q["page"]]):
+            rows = client.option_contracts("SPX", "2026-11-16", page_size=2, max_pages=2)
+        assert [r["option_symbol"] for r in rows] == ["A", "B", "C", "D"]
+
+    @pytest.mark.parametrize("bad_row", [["not", "a", "dict"], {"option_symbol": ["x"]},
+                                         {"option_symbol": ""}, {"volume": 1}])
+    def test_malformed_row_raises_client_error(self, bad_row):
+        client = UnusualWhalesClient(_cfg())
+        with patch.object(client, "get", return_value={"data": [bad_row]}):
+            with pytest.raises(UnusualWhalesError, match="row 0"):
+                client.option_contracts("SPX", "2026-11-16")
