@@ -304,3 +304,10 @@ def test_duplicate_widths_build_each_spread_once():
     rows = [_row("P", 6975, 2.0, 2.2, -0.15), _row("P", 6950, 0.5, 0.6, -0.05)]
     spreads = f.find_credit_spreads(f.parse_contracts(rows), "put", widths=(25, 25.0))
     assert len(spreads) == 1
+
+
+@pytest.mark.parametrize("strike, text", [(7000.0, "7000"), (590.5, "590.5"),
+                                          (6000.001, "6000.001"), (6000.002, "6000.002"),
+                                          (16.1, "16.1")])
+def test_fmt_strike_keeps_every_occ_decimal(strike, text):
+    assert f.fmt_strike(strike) == text

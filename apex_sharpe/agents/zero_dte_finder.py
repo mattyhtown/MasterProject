@@ -39,7 +39,7 @@ def _ticks(strike: float) -> int:
 
 def fmt_strike(strike: float) -> str:
     """Strike as listed: no decimals for whole strikes, otherwise exact."""
-    return f"{strike:.0f}" if strike == int(strike) else f"{strike:g}"
+    return f"{strike:.3f}".rstrip("0").rstrip(".")
 
 
 @dataclass(frozen=True)
@@ -500,7 +500,7 @@ def save_chart(result: Dict[str, Any], path: str, title: str = "") -> str:
                          (best.pop * 100, best.return_on_risk * 100),
                          textcoords="offset points", xytext=(8, 6),
                          color=ink, fontsize=9)
-    ax2.set_title("Candidates: chance of keeping the credit vs return on risk",
+    ax2.set_title("Candidates: POP (delta proxy) vs return on risk",
                   loc="left", color=ink, fontsize=12, fontweight="bold")
     ax2.set_xlabel("POP: 1 - |delta| of the short strike (%), a delta proxy",
                    color=muted)
