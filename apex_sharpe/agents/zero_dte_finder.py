@@ -38,7 +38,7 @@ def _ticks(strike: float) -> int:
 
 
 def fmt_points(value: float) -> str:
-    """Price in points: cents, or three decimals when smaller than a cent."""
+    """Price in points: two decimals unless a third changes the displayed value."""
     return f"{value:.2f}" if round(value, 2) == round(value, 3) else f"{value:.3f}"
 
 
@@ -265,28 +265,31 @@ def expected_move(quotes: Sequence[Quote]) -> Optional[float]:
     intrinsic value, not time value, would make up most of the straddle.
     """
     forward = implied_forward(quotes)
-    if forward is None:
+    anchor = _atm_pair(quotes)
+    if forward is None or anchor is None:
         return None
+    anchor_width = (anchor[0].ask - anchor[0].bid) + (anchor[1].ask - anchor[1].bid)
     # The straddle is taken at the quoted strike nearest the forward, which
     # need not be the pair that set the forward (that one is picked for tight
-    # quotes, not for being at the money). A candidate must agree with the
-    # forward within its own quote width, be no wider than it is worth, and
-    # sit within half a straddle of the forward; the nearest such strike wins.
+    # quotes, not for being at the money). A candidate's parity range must
+    # overlap the anchor's (both bid/ask widths count), its quote must be no
+    # wider than it is worth, and it must sit within half a straddle of the
+    # forward. The nearest such strike wins; ties go to the tighter quote.
     candidates = []
     for call, put in _two_sided_pairs(quotes):
         straddle = call.mid + put.mid
         width = (call.ask - call.bid) + (put.ask - put.bid)
         implied = call.strike + call.mid - put.mid
-        if abs(implied - forward) > width / 2 + _EPS:
+        if abs(implied - forward) > (width + anchor_width) / 2 + _EPS:
             continue  # disagrees with the forward: stale or inconsistent
         if width > straddle:
             continue  # quote wider than the straddle itself: uninformative
         if abs(call.strike - forward) > straddle / 2:
             continue  # mostly intrinsic value, not a priced move
-        candidates.append((abs(call.strike - forward), straddle))
+        candidates.append((abs(call.strike - forward), width, straddle))
     if not candidates:
         return None
-    return min(candidates)[1]
+    return min(candidates)[2]
 
 
 def find_credit_spreads(
@@ -398,8 +401,8 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
         lines.append(f"  Forward and priced move unavailable (no clean call/put pair"
                      f" gave a valid positive forward)   {root}   {len(result['quotes'])} contracts")
     elif move is None:
-        lines.append(f"  Forward {forward:,.1f}   priced move unavailable (nearest quoted"
-                     f" pair is far from the forward)   {root}"
+        lines.append(f"  Forward {forward:,.1f}   priced move unavailable (no straddle near"
+                     f" the forward was quoted tightly and consistently enough)   {root}"
                      f"   {len(result['quotes'])} contracts")
     else:
         lines.append(f"  Forward {forward:,.1f}   priced move into close ±{move:.1f}"

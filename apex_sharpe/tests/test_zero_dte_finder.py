@@ -321,8 +321,8 @@ def test_fmt_strike_keeps_every_occ_decimal(strike, text):
 def test_straddle_uses_strike_nearest_forward_not_tightest_pair():
     # Both pairs imply a 7,000 forward; the tighter 7,005 pair sets it, but the
     # move must come from the 7,000 straddle (11 points), not be suppressed.
-    # The 7,000 mids alone would imply 7,001, so a forward of 7,000 proves the
-    # tighter 7,005 pair anchored it.
+    # The tighter 7,005 pair sets the 7,000 forward (the 7,000 mids alone
+    # would imply 7,001), but the move comes from the 7,000 straddle.
     rows = [_row("C", 7000, 4.0, 8.0, 0.5), _row("P", 7000, 3.0, 7.0, -0.5),
             _row("C", 7005, 1.75, 2.25, 0.4), _row("P", 7005, 6.75, 7.25, -0.6)]
     result = f.scan(rows, expiry="2026-11-16")
@@ -354,3 +354,30 @@ def test_equally_near_strikes_are_both_tried():
                                          (0.014, "0.014"), (0.0, "0.00")])
 def test_fmt_points_shows_third_decimal_when_it_matters(value, text):
     assert f.fmt_points(value) == text
+
+
+def test_overlapping_parity_ranges_keep_the_move():
+    # 7,005 pair anchors forward ~7,002.45 but fails the distance guard; the
+    # 7,000 pair's parity range overlaps the anchor's, so its 6.60 straddle
+    # prices the move.
+    rows = [_row("C", 7005, 0.45, 0.55, 0.3), _row("P", 7005, 2.90, 3.20, -0.7),
+            _row("C", 7000, 4.60, 4.80, 0.6), _row("P", 7000, 1.80, 2.00, -0.4)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7002.45)
+    assert result["expected_move"] == pytest.approx(6.6)
+
+
+def test_equal_distance_tie_goes_to_tighter_quote():
+    rows = [_row("C", 7000, 4.70, 4.80, 0.6), _row("P", 7000, 2.20, 2.30, -0.4),
+            _row("C", 7005, 0.50, 3.50, 0.4), _row("P", 7005, 3.00, 6.00, -0.6)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7002.5)
+    assert result["expected_move"] == pytest.approx(7.0)
+
+
+def test_quote_wider_than_straddle_does_not_price_the_move():
+    rows = [_row("C", 7000, 1.0, 4.0, 0.5), _row("P", 7000, 1.0, 4.0, -0.5)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7000.0)
+    assert result["expected_move"] is None
+    assert "quoted tightly and consistently" in f.format_report(result)
