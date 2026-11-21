@@ -29,6 +29,9 @@ DEFAULT_WIDTHS = (10.0, 25.0, 50.0)
 AM_SETTLED_ROOTS = frozenset({"SPX", "NDX", "RUT", "DJX", "MXEA", "MXEF", "VIX", "VIXW"})
 
 
+_EPS = 1e-9  # below this a price difference is float noise, not money
+
+
 def _ticks(strike: float) -> int:
     """Strike in OCC thousandths of a point, for exact matching."""
     return int(round(strike * 1000))
@@ -74,7 +77,7 @@ class CreditSpread:
 
     @property
     def width(self) -> float:
-        return abs(self.short.strike - self.long.strike)
+        return abs(_ticks(self.short.strike) - _ticks(self.long.strike)) / 1000
 
     @property
     def credit(self) -> float:
@@ -87,11 +90,11 @@ class CreditSpread:
 
     @property
     def max_loss(self) -> float:
-        return round(self.width - self.credit, 2)
+        return self.width - self.credit
 
     @property
     def return_on_risk(self) -> float:
-        return self.credit / self.max_loss if self.max_loss > 0 else 0.0
+        return self.credit / self.max_loss if self.max_loss > _EPS else 0.0
 
     @property
     def pop(self) -> float:
@@ -126,7 +129,7 @@ class IronCondor:
 
     @property
     def max_loss(self) -> float:
-        return round(self.width - self.credit, 2)
+        return self.width - self.credit
 
     @property
     def return_on_risk(self) -> float:
@@ -156,7 +159,7 @@ def _num(value: Any) -> float:
     """Feed number as a float; missing, malformed, NaN or infinite becomes 0."""
     try:
         number = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0.0
     return number if math.isfinite(number) else 0.0
 
@@ -202,7 +205,7 @@ def pick_root(quotes: Sequence[Quote]) -> str:
     for q in quotes:
         if q.root not in AM_SETTLED_ROOTS:
             counts[q.root] = counts.get(q.root, 0) + 1
-            if q.bid > 0 or q.ask > 0:
+            if (q.bid > 0 or q.ask > 0) and not q.crossed:
                 live[q.root] = live.get(q.root, 0) + 1
     if not counts:
         return ""
@@ -231,7 +234,10 @@ def _atm_pair(quotes: Sequence[Quote]) -> Optional[Tuple[Quote, Quote]]:
     pairs = _two_sided_pairs(quotes)
     if not pairs:
         return None
-    return min(pairs, key=lambda cp: abs(cp[0].mid - cp[1].mid))
+    # Nearest the money is where call and put mids meet; quote width is added
+    # so a wide, uninformative market can't pass for the at-the-money pair.
+    return min(pairs, key=lambda cp: abs(cp[0].mid - cp[1].mid)
+               + (cp[0].ask - cp[0].bid) + (cp[1].ask - cp[1].bid))
 
 
 def implied_forward(quotes: Sequence[Quote]) -> Optional[float]:
@@ -278,8 +284,12 @@ def find_credit_spreads(
         raise ValueError("side must be 'put' or 'call'")
     right = "P" if side == "put" else "C"
     direction = -1.0 if side == "put" else 1.0
-    if not all(0 < w for w in widths):
-        raise ValueError("widths must be positive")
+    for w in widths:
+        if not (isinstance(w, (int, float)) and math.isfinite(w) and w > 0):
+            raise ValueError(f"width {w!r} must be a finite positive number")
+        if abs(w * 1000 - round(w * 1000)) > 1e-6:
+            raise ValueError(f"width {w!r} is finer than OCC strike precision (0.001)")
+    tick_widths = sorted({_ticks(w) for w in widths})
     by_strike = {_ticks(q.strike): q for q in quotes if q.right == right}
     spreads = []
     for short in by_strike.values():
@@ -287,12 +297,12 @@ def find_credit_spreads(
             continue
         if short.bid <= 0 or short.crossed or short.volume < min_volume:
             continue
-        for width in widths:
-            long = by_strike.get(_ticks(short.strike) + int(direction) * _ticks(width))
+        for tick_width in tick_widths:
+            long = by_strike.get(_ticks(short.strike) + int(direction) * tick_width)
             if long is None or long.ask <= 0 or long.crossed or long.volume < min_volume:
                 continue
             spread = CreditSpread(side=side, short=short, long=long)
-            if spread.credit >= min_credit and spread.max_loss > 0:
+            if spread.credit >= min_credit - _EPS and spread.max_loss > _EPS:
                 spreads.append(spread)
     return sorted(spreads, key=lambda s: s.score, reverse=True)
 
@@ -313,7 +323,7 @@ def find_iron_condors(
             if abs(abs(put.short.delta) - abs(call.short.delta)) > max_delta_gap + 1e-9:
                 continue
             condor = IronCondor(put=put, call=call)
-            if condor.max_loss > 0:
+            if condor.max_loss > _EPS:
                 condors.append(condor)
     return sorted(condors, key=lambda c: c.score, reverse=True)
 
@@ -365,9 +375,13 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
                 "\n  The market is probably closed: same-day contracts trade"
                 " 9:30-16:00 ET.")
     root = result.get("root") or "-"
-    if forward is None or move is None:
-        lines.append(f"  Forward and priced move unavailable (no quoted call/put pair"
+    if forward is None:
+        lines.append(f"  Forward and priced move unavailable (no clean call/put pair"
                      f" at a common strike)   {root}   {len(result['quotes'])} contracts")
+    elif move is None:
+        lines.append(f"  Forward {forward:,.1f}   priced move unavailable (nearest quoted"
+                     f" pair is far from the forward)   {root}"
+                     f"   {len(result['quotes'])} contracts")
     else:
         lines.append(f"  Forward {forward:,.1f}   priced move into close ±{move:.1f}"
                      f" ({move / forward:.2%})   {root}   {len(result['quotes'])} contracts")

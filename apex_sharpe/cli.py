@@ -1107,7 +1107,11 @@ def main() -> None:
                 print(find_usage)
                 sys.exit(0)
             if arg == "--chart":
-                if i + 1 >= len(args) or args[i + 1].startswith("-"):
+                if chart_path:
+                    print(f"  [ERROR] --chart given more than once\n{find_usage}")
+                    sys.exit(2)
+                if (i + 1 >= len(args) or args[i + 1].startswith("-")
+                        or not args[i + 1].strip()):
                     print(f"  [ERROR] --chart needs a file path\n{find_usage}")
                     sys.exit(2)
                 chart_path = args[i + 1]
@@ -1147,9 +1151,12 @@ def main() -> None:
         result = finder.scan(rows, expiry=expiry)
         print(finder.format_report(result))
         if chart_path:
-            if result["forward"] is None or result["expected_move"] is None:
-                print("\n  No chart written: it needs a forward and priced move,"
-                      " and no quoted call/put pair near the money was found.")
+            if result["forward"] is None:
+                print("\n  No chart written: no clean call/put pair at a common strike,"
+                      " so there is no forward to centre it on.")
+            elif result["expected_move"] is None:
+                print("\n  No chart written: the priced move is unavailable (the nearest"
+                      " quoted call/put pair is far from the forward).")
             else:
                 try:
                     written = finder.save_chart(

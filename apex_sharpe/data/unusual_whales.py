@@ -115,6 +115,8 @@ class UnusualWhalesClient:
         """
         if not 0 < page_size <= 500:
             raise ValueError("page_size must be 1-500 (the endpoint's cap)")
+        if max_pages < 1:
+            raise ValueError("max_pages must be at least 1")
         by_symbol: dict = {}
         for page in range(max_pages + 1):
             payload = self.get(
@@ -132,7 +134,7 @@ class UnusualWhalesClient:
                 return list(by_symbol.values())
             for i, row in enumerate(batch):
                 symbol = row.get("option_symbol") if isinstance(row, dict) else None
-                if not isinstance(symbol, str) or not symbol:
+                if not isinstance(symbol, str) or not symbol.strip():
                     raise UnusualWhalesError(
                         f"Unusual Whales option-contracts page {page} row {i} for"
                         f" {ticker} {expiry} has no option_symbol string")

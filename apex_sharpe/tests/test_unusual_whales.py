@@ -174,10 +174,17 @@ class TestOptionContractsPagination:
 
     def test_chain_longer_than_max_pages_raises(self):
         client = UnusualWhalesClient(_cfg())
-        full = {"data": [{"option_symbol": f"S{i}"} for i in range(2)]}
-        with patch.object(client, "get", return_value=full):
+        requested = []
+
+        def fake_get(path, params):  # distinct symbols on every page, probe included
+            requested.append(params["page"])
+            p = params["page"]
+            return {"data": [{"option_symbol": f"S{p}-{i}"} for i in range(2)]}
+
+        with patch.object(client, "get", side_effect=fake_get):
             with pytest.raises(UnusualWhalesError, match="partial chain"):
                 client.option_contracts("SPX", "2026-11-16", page_size=2, max_pages=3)
+        assert requested == [0, 1, 2, 3]
 
     def test_page_size_above_endpoint_cap_is_rejected(self):
         client = UnusualWhalesClient(_cfg())
@@ -191,14 +198,29 @@ class TestOptionContractsPagination:
         pages = {0: {"data": [{"option_symbol": "A"}, {"option_symbol": "B"}]},
                  1: {"data": [{"option_symbol": "C"}, {"option_symbol": "D"}]},
                  2: {"data": []}}
-        with patch.object(client, "get", side_effect=lambda p, q: pages[q["page"]]):
+        requested = []
+
+        def fake_get(path, params):
+            requested.append(params["page"])
+            return pages[params["page"]]
+
+        with patch.object(client, "get", side_effect=fake_get):
             rows = client.option_contracts("SPX", "2026-11-16", page_size=2, max_pages=2)
         assert [r["option_symbol"] for r in rows] == ["A", "B", "C", "D"]
+        assert requested == [0, 1, 2]  # the empty probe page was fetched
 
     @pytest.mark.parametrize("bad_row", [["not", "a", "dict"], {"option_symbol": ["x"]},
-                                         {"option_symbol": ""}, {"volume": 1}])
+                                         {"option_symbol": ""}, {"option_symbol": "   "},
+                                         {"volume": 1}])
     def test_malformed_row_raises_client_error(self, bad_row):
         client = UnusualWhalesClient(_cfg())
         with patch.object(client, "get", return_value={"data": [bad_row]}):
             with pytest.raises(UnusualWhalesError, match="row 0"):
                 client.option_contracts("SPX", "2026-11-16")
+
+    def test_zero_page_budget_is_rejected_without_a_request(self):
+        client = UnusualWhalesClient(_cfg())
+        with patch.object(client, "get") as mock_get:
+            with pytest.raises(ValueError, match="max_pages"):
+                client.option_contracts("SPX", "2026-11-16", max_pages=0)
+            mock_get.assert_not_called()

@@ -159,9 +159,9 @@ def test_save_chart_rejects_result_without_forward(tmp_path):
 
 def test_non_finite_feed_numbers_are_treated_as_missing():
     row = _row("P", 6975, 2.0, 2.2, -0.15)
-    row.update(volume="NaN", open_interest="Infinity", nbbo_ask="inf")
+    row.update(volume="NaN", open_interest="Infinity", nbbo_ask="inf", delta=10 ** 400)
     (q,) = f.parse_contracts([row])
-    assert (q.volume, q.open_interest, q.ask) == (0, 0, 0.0)
+    assert (q.volume, q.open_interest, q.ask, q.delta) == (0, 0, 0.0, 0.0)
 
 
 def test_fractional_strikes_match_exactly_and_print_exactly():
@@ -250,8 +250,57 @@ def test_save_chart_writes_png_and_adds_suffix(tmp_path):
     pytest.importorskip("matplotlib")
     result = f.scan(CHAIN[:-1], expiry="2026-11-16", widths=(25,))
     written = f.save_chart(result, str(tmp_path / "report"))
-    assert written.endswith("report.png")
+    assert written == str(tmp_path / "report.png")
     with open(written, "rb") as fh:
         assert fh.read(8) == b"\x89PNG\r\n\x1a\n"
     with pytest.raises(ValueError, match=".png"):
         f.save_chart(result, str(tmp_path / "report.jpg"))
+
+
+def test_condor_delta_gap_just_outside_boundary_is_rejected():
+    put = f.CreditSpread("put", f.Quote(6950, "P", 2, 2.1, -0.15, .2, 1, 1),
+                         f.Quote(6940, "P", 1, 1.1, -0.1, .2, 1, 1))
+    call = f.CreditSpread("call", f.Quote(7050, "C", 2, 2.1, 0.201, .2, 1, 1),
+                          f.Quote(7060, "C", 1, 1.1, 0.1, .2, 1, 1))
+    assert f.find_iron_condors([put], [call]) == []
+
+
+def test_wide_quotes_do_not_pass_for_the_at_the_money_pair():
+    rows = [_row("C", 6975, 26.0, 26.5, 0.8), _row("P", 6975, 0.25, 52.25, -0.2),
+            _row("C", 7000, 10.75, 11.25, 0.5), _row("P", 7000, 9.75, 10.25, -0.5)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7001.0)
+    assert result["expected_move"] == pytest.approx(21.0)
+
+
+def test_forward_is_reported_when_only_the_move_is_missing():
+    rows = [_row("C", 6950, 50.4, 50.6, 0.99), _row("P", 6950, 0.1, 0.2, -0.01)]
+    report = f.format_report(f.scan(rows, expiry="2026-11-16"))
+    assert "Forward 7,000.4" in report and "priced move unavailable" in report
+
+
+def test_crossed_quotes_do_not_make_a_series_look_live():
+    rows = [_row("C", 7000, 5, 1, 0.5, root="XSP"), _row("P", 7000, 0, 0, -0.5, root="XSP"),
+            _row("C", 7010, 0, 0, 0.4, root="XSP"),
+            _row("C", 7000, 11.8, 12.2, 0.5), _row("P", 7000, 9.8, 10.2, -0.5)]
+    assert f.pick_root(f.parse_contracts(rows)) == "SPXW"
+
+
+def test_tiny_fractional_width_keeps_its_exact_max_loss():
+    rows = [_row("P", 100.504, 0.70, 0.8, -0.15), _row("P", 100.0, 0.1, 0.20, -0.05)]
+    spreads = f.find_credit_spreads(f.parse_contracts(rows), "put", widths=(0.504,),
+                                    min_credit=0.5)
+    assert len(spreads) == 1
+    assert spreads[0].max_loss == pytest.approx(0.004)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), 0, -10, 10.0004])
+def test_invalid_widths_are_rejected(bad):
+    with pytest.raises(ValueError):
+        f.find_credit_spreads([], "put", widths=(bad,))
+
+
+def test_duplicate_widths_build_each_spread_once():
+    rows = [_row("P", 6975, 2.0, 2.2, -0.15), _row("P", 6950, 0.5, 0.6, -0.05)]
+    spreads = f.find_credit_spreads(f.parse_contracts(rows), "put", widths=(25, 25.0))
+    assert len(spreads) == 1
