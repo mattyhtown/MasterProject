@@ -100,8 +100,15 @@ class UnusualWhalesClient:
 
     def option_contracts(self, ticker: str, expiry: str, page_size: int = 500,
                          max_pages: int = 10) -> list:
-        """All option contracts for one expiry, following pagination."""
-        rows: list = []
+        """All option contracts for one expiry, following pagination.
+
+        The endpoint returns at most 500 rows per page, ordered by volume, and
+        volume changes between page requests during the session. A contract can
+        therefore appear on two pages; each symbol is kept once, from the
+        latest page that returned it.
+        """
+        by_symbol: dict = {}
+        unkeyed: list = []
         for page in range(max_pages):
             payload = self.get(
                 f"/api/stock/{ticker}/option-contracts",
@@ -110,7 +117,12 @@ class UnusualWhalesClient:
             batch = payload.get("data") if isinstance(payload, dict) else None
             if not isinstance(batch, list):
                 break
-            rows.extend(batch)
+            for row in batch:
+                symbol = row.get("option_symbol") if isinstance(row, dict) else None
+                if symbol:
+                    by_symbol[symbol] = row
+                else:
+                    unkeyed.append(row)
             if len(batch) < page_size:
                 break
-        return rows
+        return list(by_symbol.values()) + unkeyed

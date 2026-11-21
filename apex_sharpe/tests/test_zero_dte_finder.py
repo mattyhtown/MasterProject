@@ -109,3 +109,11 @@ def test_spreads_still_shown_without_forward():
     assert "Forward and priced move unavailable" in report
     assert "6975" in report and "n/a" in report
     assert "market is probably closed" not in report
+
+
+def test_pick_root_prefers_pm_settled_sibling_for_other_indices():
+    # NDX (AM) outnumbers NDXP (PM) here, but the PM series must still win.
+    rows = [_row("C", 20000, 1, 1, 0.5, root="NDX"),
+            _row("P", 20000, 1, 1, -0.5, root="NDX"),
+            _row("C", 20000, 1, 1, 0.5, root="NDXP")]
+    assert f.pick_root(f.parse_contracts(rows)) == "NDXP"

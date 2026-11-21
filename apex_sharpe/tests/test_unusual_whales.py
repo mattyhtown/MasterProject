@@ -138,3 +138,21 @@ class TestHttpErrors:
         ):
             with pytest.raises(UnusualWhalesError, match="HTTP 401"):
                 client.flow_alerts()
+
+
+class TestOptionContractsPagination:
+    def test_duplicate_symbols_across_pages_are_kept_once(self):
+        client = UnusualWhalesClient(_cfg())
+        page0 = {"data": [{"option_symbol": f"SPXW261116C0{7000 + i:04d}000",
+                           "volume": 100 - i} for i in range(3)]}
+        # Volume re-ordered between requests: the last row of page 0 shows up
+        # again on page 1 with an updated volume.
+        page1 = {"data": [{"option_symbol": "SPXW261116C07002000", "volume": 999},
+                          {"option_symbol": "SPXW261116C07003000", "volume": 1}]}
+        pages = iter([page0, page1])
+        with patch.object(client, "get", side_effect=lambda *a, **k: next(pages)):
+            rows = client.option_contracts("SPX", "2026-11-16", page_size=3)
+        symbols = [r["option_symbol"] for r in rows]
+        assert len(symbols) == len(set(symbols)) == 4
+        latest = {r["option_symbol"]: r["volume"] for r in rows}
+        assert latest["SPXW261116C07002000"] == 999

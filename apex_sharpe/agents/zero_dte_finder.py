@@ -19,6 +19,11 @@ OCC_RE = re.compile(r"^([A-Z]+)(\d{6})([CP])(\d{8})$")
 
 DEFAULT_WIDTHS = (10.0, 25.0, 50.0)
 
+# Index option roots that settle on the next morning's opening print (AM).
+# Their PM-settled siblings (SPXW, NDXP, RUTW, ...) are what a same-day
+# intraday scan wants.
+AM_SETTLED_ROOTS = frozenset({"SPX", "NDX", "RUT", "DJX", "MXEA", "MXEF"})
+
 
 @dataclass(frozen=True)
 class Quote:
@@ -163,16 +168,17 @@ def parse_contracts(rows: Iterable[Dict[str, Any]], expiry: str = "") -> List[Qu
 def pick_root(quotes: Sequence[Quote]) -> str:
     """Choose one settlement series so spreads never mix AM and PM settlement.
 
-    On monthly-expiry dates SPX (AM-settled) and SPXW (PM-settled) share an
-    expiry date. A same-day scan wants the PM-settled weekly root (ending in
-    "W"); otherwise the root with the most contracts.
+    On monthly-expiry dates an AM-settled root (SPX, NDX, RUT, ...) shares
+    its expiry date with a PM-settled sibling (SPXW, NDXP, RUTW, ...). A
+    same-day scan wants the PM-settled series, so AM-settled roots rank last;
+    among the rest, the root with the most contracts wins.
     """
     counts: Dict[str, int] = {}
     for q in quotes:
         counts[q.root] = counts.get(q.root, 0) + 1
     if not counts:
         return ""
-    return max(counts, key=lambda r: (r.endswith("W"), counts[r]))
+    return max(counts, key=lambda r: (r not in AM_SETTLED_ROOTS, counts[r]))
 
 
 def has_two_sided_quotes(quotes: Sequence[Quote]) -> bool:
@@ -294,8 +300,8 @@ def format_report(result: Dict[str, Any], top: int = 5) -> str:
         return "  No contracts in the chain — nothing to scan."
     if not has_two_sided_quotes(result["quotes"]):
         return (f"  {len(result['quotes'])} contracts but none has both a bid and an ask."
-                "\n  The market is probably closed: re-run during regular hours"
-                " (9:30-16:15 ET).")
+                "\n  The market is probably closed: same-day contracts trade"
+                " 9:30-16:00 ET.")
     root = result.get("root") or "-"
     if forward is None or move is None:
         lines.append(f"  Forward and priced move unavailable (no quoted call/put pair"
