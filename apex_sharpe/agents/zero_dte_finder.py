@@ -39,7 +39,7 @@ def _ticks(strike: float) -> int:
 
 def fmt_points(value: float) -> str:
     """Price in points: cents, or three decimals when smaller than a cent."""
-    return f"{value:.2f}" if abs(value) >= 0.01 or value == 0 else f"{value:.3f}"
+    return f"{value:.2f}" if round(value, 2) == round(value, 3) else f"{value:.3f}"
 
 
 def fmt_strike(strike: float) -> str:
@@ -269,13 +269,24 @@ def expected_move(quotes: Sequence[Quote]) -> Optional[float]:
         return None
     # The straddle is taken at the quoted strike nearest the forward, which
     # need not be the pair that set the forward (that one is picked for tight
-    # quotes, not for being at the money).
-    pairs = _two_sided_pairs(quotes)
-    call, put = min(pairs, key=lambda cp: abs(cp[0].strike - forward))
-    straddle = call.mid + put.mid
-    if abs(call.strike - forward) > straddle / 2:
+    # quotes, not for being at the money). A candidate must agree with the
+    # forward within its own quote width, be no wider than it is worth, and
+    # sit within half a straddle of the forward; the nearest such strike wins.
+    candidates = []
+    for call, put in _two_sided_pairs(quotes):
+        straddle = call.mid + put.mid
+        width = (call.ask - call.bid) + (put.ask - put.bid)
+        implied = call.strike + call.mid - put.mid
+        if abs(implied - forward) > width / 2 + _EPS:
+            continue  # disagrees with the forward: stale or inconsistent
+        if width > straddle:
+            continue  # quote wider than the straddle itself: uninformative
+        if abs(call.strike - forward) > straddle / 2:
+            continue  # mostly intrinsic value, not a priced move
+        candidates.append((abs(call.strike - forward), straddle))
+    if not candidates:
         return None
-    return straddle
+    return min(candidates)[1]
 
 
 def find_credit_spreads(

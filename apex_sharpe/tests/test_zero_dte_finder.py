@@ -321,8 +321,36 @@ def test_fmt_strike_keeps_every_occ_decimal(strike, text):
 def test_straddle_uses_strike_nearest_forward_not_tightest_pair():
     # Both pairs imply a 7,000 forward; the tighter 7,005 pair sets it, but the
     # move must come from the 7,000 straddle (11 points), not be suppressed.
-    rows = [_row("C", 7000, 3.5, 7.5, 0.5), _row("P", 7000, 3.5, 7.5, -0.5),
+    # The 7,000 mids alone would imply 7,001, so a forward of 7,000 proves the
+    # tighter 7,005 pair anchored it.
+    rows = [_row("C", 7000, 4.0, 8.0, 0.5), _row("P", 7000, 3.0, 7.0, -0.5),
             _row("C", 7005, 1.75, 2.25, 0.4), _row("P", 7005, 6.75, 7.25, -0.6)]
     result = f.scan(rows, expiry="2026-11-16")
     assert result["forward"] == pytest.approx(7000.0)
     assert result["expected_move"] == pytest.approx(11.0)
+
+
+def test_straddle_that_disagrees_with_forward_is_not_used():
+    # Tight 7,005 pair sets forward 7,000; the 7,000 pair's mids imply ~7,039,
+    # so it must not price the move. The 7,005 straddle (13) is used instead.
+    rows = [_row("C", 7005, 3.75, 4.25, 0.4), _row("P", 7005, 8.75, 9.25, -0.6),
+            _row("C", 7000, 39.9, 40.1, 0.9), _row("P", 7000, 0.9, 1.1, -0.1)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7000.0)
+    assert result["expected_move"] == pytest.approx(13.0)
+
+
+def test_equally_near_strikes_are_both_tried():
+    # Forward 7,002.5: 7,000 straddle (4.5) fails the distance guard, 7,005
+    # straddle (5.5) passes, so the move is 5.5 rather than unavailable.
+    rows = [_row("C", 7000, 3.45, 3.55, 0.6), _row("P", 7000, 0.95, 1.05, -0.4),
+            _row("C", 7005, 1.45, 1.55, 0.4), _row("P", 7005, 3.95, 4.05, -0.6)]
+    result = f.scan(rows, expiry="2026-11-16")
+    assert result["forward"] == pytest.approx(7002.5)
+    assert result["expected_move"] == pytest.approx(5.5)
+
+
+@pytest.mark.parametrize("value, text", [(8.9, "8.90"), (0.004, "0.004"),
+                                         (0.014, "0.014"), (0.0, "0.00")])
+def test_fmt_points_shows_third_decimal_when_it_matters(value, text):
+    assert f.fmt_points(value) == text
